@@ -23,19 +23,13 @@ export function toast(message, kind = 'info') {
   el.dataset.kind = kind;
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, kind === 'error' ? 6000 : 2500);
+  toastTimer = setTimeout(() => { el.hidden = true; }, kind === 'error' ? 6000 : 2200);
 }
 
-// Six sticky-note tints for element types. Each project assigns them in the order its types first
-// appear, so the first six types always get different colours. Untyped elements stay grey.
-let tints = new Map();
-export function setTypeOrder(types) {
-  tints = new Map();
-  for (const t of types) {
-    const key = t?.trim().toLowerCase();
-    if (key && !tints.has(key)) tints.set(key, 1 + (tints.size % 6));
-  }
-}
-export function typeTint(type) {
-  return tints.get(type?.trim().toLowerCase()) ?? 0;
+// Grows a textarea to fit its text.
+export function autosize(textarea) {
+  const fit = () => { textarea.style.height = 'auto'; textarea.style.height = `${textarea.scrollHeight}px`; };
+  textarea.addEventListener('input', fit);
+  requestAnimationFrame(fit);
+  return textarea;
 }

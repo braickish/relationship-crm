@@ -32,13 +32,17 @@ try {
   await page.addInitScript(() => document.addEventListener('securitypolicyviolation',
     e => console.error(`CSP blocked ${e.blockedURI} (${e.violatedDirective})`)));
 
+  const item = label => page.locator('li.el').filter({ has: page.locator(`:scope > a.name:text-is("${label}"), :scope > input.name`) }).first();
+  const conns = label => page.locator('li.el', { has: page.locator(`:scope > a.name:text-is("${label}")`) }).locator('.conn');
+  const openItem = () => page.locator('li.el.open');
+
   // Sign in with a magic link from the local inbox.
   const email = `ui-${Date.now()}@example.com`;
   await page.goto(BASE);
   await page.fill('#email', email);
-  await page.click('text=Email me a sign-in link');
+  await page.click('text=send me a link');
   await page.waitForSelector('text=Check your email');
-  check(true, 'sign-in form sends a link');
+  await page.screenshot({ path: `${SHOTS}0-signin-sent.png` });
   let link;
   for (let i = 0; i < 20 && !link; i++) {
     const list = await fetch(`${MAIL}/api/v1/search?query=${encodeURIComponent(`to:${email}`)}`).then(r => r.json());
@@ -49,87 +53,90 @@ try {
     if (!link) await new Promise(r => setTimeout(r, 500));
   }
   await page.goto(link);
-  await page.waitForSelector('text=Your projects', { timeout: 10000 });
+  await page.waitForSelector('h1:text("Projects")', { timeout: 10000 });
   check(true, 'magic link signs in and opens the project list');
   check(!page.url().includes('code='), 'the sign-in code is removed from the address bar', page.url());
-  await page.screenshot({ path: `${SHOTS}1-projects-empty.png` });
 
-  // Create a project and add elements.
+  // A project is one line.
   await page.fill('#new-project', 'Neighborhood partners');
-  await page.click('text=Create project');
-  await page.waitForSelector('#new-element-label');
-  for (const [label, type] of [['Ada Lovelace', 'person'], ['Grace Hopper', 'person'], ['Acme Foundation', 'organization'], ['Library', 'place']]) {
-    await page.fill('#new-element-label', label);
-    await page.fill('#new-element-type', type);
-    await page.press('#new-element-label', 'Enter');
-    await page.waitForSelector(`.element-list >> text=${label}`);
+  await page.press('#new-project', 'Enter');
+  await page.waitForSelector('#add-line');
+  check(await page.evaluate(() => document.activeElement?.id) === 'add-line', 'a new project opens with the cursor on its first line');
+
+  // Names and connections are lines too.
+  for (const line of ['Ada Lovelace', 'Grace Hopper', 'Acme Foundation -> Ada Lovelace : funds']) {
+    await page.fill('#add-line', line);
+    await page.press('#add-line', 'Enter');
+    await page.waitForFunction(n => document.querySelectorAll('li.el').length >= n, line.includes('->') ? 3 : line === 'Ada Lovelace' ? 1 : 2);
   }
-  check(await page.locator('.element-list li').count() === 4, 'four elements added');
-  check(await page.evaluate(() => document.activeElement?.id) === 'new-element-label', 'focus returns to the name field for quick entry');
+  check(await page.locator('li.el').count() === 3, 'two typed names plus an arrow line make three names');
+  check(await conns('Ada Lovelace').count() === 1 && (await conns('Ada Lovelace').first().innerText()).includes('Acme Foundation'),
+    'the arrow line connected Acme to Ada');
+  check(await page.evaluate(() => document.activeElement?.id) === 'add-line', 'the cursor stays on the next line for quick entry');
 
-  // An element name that would run script if it were ever treated as HTML.
-  const xss = '<img src=x onerror="alert(1)">';
-  await page.fill('#new-element-label', xss);
-  await page.press('#new-element-label', 'Enter');
-  await page.waitForSelector('.element-list >> text=<img');
-  check(await page.locator('.element-list img').count() === 0, 'an element name containing HTML is shown as text');
+  await page.fill('#add-line', '-> nobody');
+  await page.press('#add-line', 'Enter');
+  check(await page.isVisible('#toast[data-kind="error"]'), 'a line that isn’t a name or connection explains the syntax');
 
-  // Open an element and connect it.
-  await page.click('.element-list >> text=Ada Lovelace');
-  await page.waitForSelector('#conn-target');
-  await page.fill('#conn-target', 'Grace Hopper');
-  await page.fill('#conn-type', 'mentor');
-  await page.click('text=Add connection');
-  await page.waitForSelector('.connection-list >> text=Grace Hopper');
-  await page.fill('#conn-target', 'Acme Foundation');
-  await page.fill('#conn-type', 'funded by');
-  await page.selectOption('#conn-dir', 'in');
-  await page.click('text=Add connection');
-  await page.waitForSelector('.connection-list >> text=Acme Foundation');
-  await page.fill('#conn-target', 'City Council');
-  check(await page.isVisible('text=isn\'t in this project yet'), 'typing a new name explains it will be created');
-  await page.fill('#conn-type', 'advises');
-  await page.selectOption('#conn-dir', 'mutual');
-  await page.click('text=Add connection');
-  await page.waitForSelector('.connection-list >> text=City Council');
-  check(await page.locator('.connection-list li').count() === 3, 'three connections listed');
-  check(await page.locator('.egomap .node').count() === 3, 'the map shows three connected elements');
-  check(await page.locator('.element-list li').count() === 6, 'the new name became an element');
-  await page.screenshot({ path: `${SHOTS}2-element-light.png`, fullPage: true });
+  // A name that would run script if it were ever treated as HTML.
+  await page.fill('#add-line', '<img src=x onerror="alert(1)">');
+  await page.press('#add-line', 'Enter');
+  await page.waitForSelector('li.el >> text=<img');
+  check(await page.locator('.outline img').count() === 0, 'a name containing HTML is shown as text');
 
-  // Clicking a node on the map opens that element.
-  await page.click('.egomap .node >> text=Grace Hopper');
-  await page.waitForSelector('#el-label[value="Grace Hopper"]');
-  check(await page.isVisible('.connection-list >> text=Ada Lovelace'), 'the map links to the connected element, which shows the connection back');
+  // Open Ada and connect by typing.
+  await item('Ada Lovelace').locator('a.name').click();
+  await page.waitForSelector('#connect-line');
+  check(await page.evaluate(() => document.activeElement?.id) === 'connect-line', 'opening a name puts the cursor on its connection line');
+  await page.fill('#connect-line', '-> Gra');
+  await page.press('#connect-line', 'Tab');
+  check(await page.inputValue('#connect-line') === '-> Grace Hopper', 'Tab completes a name', await page.inputValue('#connect-line'));
+  await page.type('#connect-line', ' : mentor');
+  await page.press('#connect-line', 'Enter');
+  await page.waitForFunction(() => document.querySelectorAll('li.el.open .conn').length === 2);
+  await page.fill('#connect-line', '<-> City Council : advises');
+  await page.press('#connect-line', 'Enter');
+  await page.waitForFunction(() => document.querySelectorAll('li.el.open .conn').length === 3);
+  check(await page.locator('li.el').count() === 5, 'connecting to a new name adds it to the list');
+  const arrows = await openItem().locator('.conn .arrow').allInnerTexts();
+  check(arrows.join('') === '←→↔', 'each connection shows its direction', arrows.join(''));
+  check((await conns('Grace Hopper').allInnerTexts()).some(t => t.includes('Ada Lovelace') && t.includes('mentor')),
+    'the connection also appears under the other name');
 
-  // Edit and save.
-  await page.fill('#el-desc', 'Pioneer of compilers.');
-  await page.click('text=Save changes');
-  await page.waitForSelector('text=Saved');
+  // Notes save when you leave the field.
+  await page.fill('#element-notes', 'Wrote the first program.');
+  await page.click('h1, .title');
+  await page.waitForSelector('#toast >> text=Notes saved');
   await page.reload();
-  await page.waitForSelector('#el-desc');
-  check(await page.inputValue('#el-desc') === 'Pioneer of compilers.', 'notes are saved');
+  await page.waitForSelector('#element-notes');
+  check(await page.inputValue('#element-notes') === 'Wrote the first program.', 'notes are saved');
+  await page.screenshot({ path: `${SHOTS}1-project-light.png`, fullPage: true });
 
-  // Project list, dark mode and phone width.
+  // Clicking a connection opens that name.
+  await openItem().locator('.conn a', { hasText: 'Grace Hopper' }).click();
+  await page.waitForFunction(() => document.querySelector('li.el.open input.name')?.value === 'Grace Hopper');
+  check(true, 'clicking a connection opens that name');
+
   await page.goto(BASE);
-  await page.waitForSelector('.note');
-  await page.screenshot({ path: `${SHOTS}3-projects.png` });
+  await page.waitForSelector('.outline a.name');
+  await page.screenshot({ path: `${SHOTS}2-projects.png` });
   await page.emulateMedia({ colorScheme: 'dark' });
-  await page.click('.note');
-  await page.click('.element-list >> text=Ada Lovelace');
-  await page.waitForSelector('.egomap');
-  await page.screenshot({ path: `${SHOTS}4-element-dark.png`, fullPage: true });
+  await page.click('.outline a.name');
+  await page.waitForSelector('li.el');
+  await item('Ada Lovelace').locator('a.name').click();
+  await page.waitForSelector('#connect-line');
+  await page.screenshot({ path: `${SHOTS}3-project-dark.png`, fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ colorScheme: 'light' });
-  await page.screenshot({ path: `${SHOTS}5-element-phone.png`, fullPage: true });
+  await page.screenshot({ path: `${SHOTS}4-project-phone.png`, fullPage: true });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
   check(overflow <= 0, 'nothing scrolls sideways at phone width', `${overflow}px too wide`);
 
-  // Fonts came from the site itself, not a third party.
-  check(await page.evaluate(() => document.fonts.check('700 20px Kalam')), 'the handwritten font loaded');
+  for (const font of ['Rock Salt', 'Reenie Beanie', 'Special Elite']) {
+    check(await page.evaluate(f => document.fonts.check(`20px "${f}"`), font), `${font} loaded from the site itself`);
+  }
 
-  // Sign out returns to the sign-in screen and hides the data.
-  await page.click('text=Sign out');
+  await page.click('text=sign out');
   await page.waitForSelector('#email');
   check(true, 'sign out returns to the sign-in screen');
 
