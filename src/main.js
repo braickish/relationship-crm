@@ -293,7 +293,7 @@ function projectView() {
   const ties = neighbourhoods();
   const cards = elements.map(el => elementCard(el, ties.get(el.id) || []));
   const list = h('div', { id: 'cards', class: 'cards' }, cards);
-  const addCard = editable && h('button', { class: 'card add', type: 'button', hidden: true, onclick: () => addFromSearch() });
+  const addCard = editable && h('button', { class: 'card add', id: 'add-card', type: 'button', hidden: true, onclick: () => addFromSearch() });
   const status = h('p', { class: 'quiet count', 'aria-live': 'polite' });
   const search = searchLine({
     placeholder: elements.length ? (editable ? 'find or add a name…' : 'find a name…') : 'add the first name…',
@@ -344,7 +344,7 @@ function projectView() {
     const offer = parsed && (parsed.kind === 'connection' || !byLabel(parsed.name.label) || parsed.name.typeGiven);
     if (addCard) {
       addCard.hidden = !offer;
-      if (offer) addCard.replaceChildren(h('span', { class: 'plus' }, '+ add '), describeLine(parsed));
+      if (offer) addCard.replaceChildren(...addPreview(parsed).flat());
     }
     status.textContent = q ? (ranked.length ? `${ranked.length.toLocaleString()} of ${plural(elements.length, 'name')}` : 'no matches') : '';
     setActive(q ? (ranked[0]?.[1] ?? (offer ? addCard : null)) : null);
@@ -417,10 +417,29 @@ function highlight(node, label, q) {
   node.replaceChildren(...(at < 0 ? [label] : [label.slice(0, at), h('mark', {}, label.slice(at, at + q.length)), label.slice(at + q.length)]));
 }
 
-function describeLine(parsed) {
-  const name = n => h('strong', {}, n.label, n.typeGiven && n.type ? ` [${n.type}]` : '');
-  if (parsed.kind === 'element') return name(parsed.name);
-  return [name(parsed.from), ` ${ARROW_GLYPH[TYPED_ARROW[parsed.arrow]]} `, name(parsed.to), parsed.type && ` : ${parsed.type}`];
+// What Enter would do, drawn in the dashed card above the matches: each name marked new or
+// existing, the arrow spelled out, and a key hint that only says Enter when Enter is what picks it.
+function addPreview(parsed) {
+  const name = n => {
+    const found = byLabel(n.label);
+    const retyped = found && n.typeGiven && n.type !== found.element_type;
+    const type = n.typeGiven ? n.type : found?.element_type;
+    return h('span', { class: 'add-name' },
+      found ? found.label : n.label,
+      type && h('span', { class: 'type' }, ` [${type}]`),
+      !found ? h('span', { class: 'tag' }, 'new') : retyped && h('span', { class: 'tag' }, n.type ? `was ${found.element_type ? `[${found.element_type}]` : 'untyped'}` : 'type removed'));
+  };
+  const what = parsed.kind === 'connection' ? 'add connection' : byLabel(parsed.name.label) ? 'change type' : 'add name';
+  return [
+    h('span', { class: 'add-head' }, what,
+      h('span', { class: 'hint' }, h('span', { class: 'on-enter' }, h('kbd', {}, 'Enter'), ' to add'), h('span', { class: 'on-click' }, 'click to add'))),
+    parsed.kind === 'element' ? name(parsed.name) : [
+      name(parsed.from),
+      h('span', { class: 'add-link' }, h('span', { class: 'arrow' }, ARROW_GLYPH[TYPED_ARROW[parsed.arrow]]), ' ', ARROW_WORDS[TYPED_ARROW[parsed.arrow]],
+        parsed.type && h('span', { class: 'kind' }, ` : ${parsed.type}`)),
+      name(parsed.to),
+    ],
+  ];
 }
 
 // Every name's connections, worked out in one pass over the project.

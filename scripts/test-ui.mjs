@@ -87,6 +87,11 @@ try {
   check(await page.locator('.cards img').count() === 0, 'a name containing HTML is shown as text');
 
   await page.fill('#search', 'Grace Hopper -> Babbage : writes to');
+  const preview = await page.innerText('.card.add');
+  check(!preview.includes('[object') && /Grace Hopper[\s\S]*points to : writes to[\s\S]*Babbage/.test(preview), 'an arrow line previews the connection it will add', preview);
+  check(/Babbage\s*new/i.test(preview) && !/Grace Hopper\s*new/i.test(preview), 'the preview marks only the names that are new');
+  check(await page.isVisible('.card.add.active .on-enter'), 'the preview says Enter will add it');
+  await page.screenshot({ path: `${SHOTS}3-add-preview.png` });
   await page.press('#search', 'Enter');
   await page.waitForFunction(() => document.querySelectorAll('.cards .card').length === 5);
 
