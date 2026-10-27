@@ -33,8 +33,8 @@ try {
     e => console.error(`CSP blocked ${e.blockedURI} (${e.violatedDirective})`)));
 
   const nameRe = label => new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( \\[.*\\])?$`);
-  const item = label => page.locator('li.el').filter({ has: page.locator(':scope > a.name', { hasText: nameRe(label) }) }).first();
-  const conns = label => page.locator('li.el').filter({ has: page.locator(':scope > a.name', { hasText: nameRe(label) }) }).locator('.conn');
+  const card = label => page.locator('.cards .card').filter({ has: page.locator('.name', { hasText: nameRe(label) }) }).first();
+  const visibleCards = () => page.locator('.cards .card:not([hidden])').count();
   const zone = key => page.locator(`.zone.${key}`);
 
   // Sign in with a magic link from the local inbox.
@@ -58,44 +58,56 @@ try {
   check(true, 'magic link signs in and opens the project list');
   check(!page.url().includes('code='), 'the sign-in code is removed from the address bar', page.url());
 
-  // A project is one line.
+  // A project is one line, and opens on its search.
   await page.fill('#new-project', 'Neighborhood partners');
   await page.press('#new-project', 'Enter');
-  await page.waitForSelector('#add-line');
-  check(await page.evaluate(() => document.activeElement?.id) === 'add-line', 'a new project opens with the cursor on its first line');
+  await page.waitForSelector('#search');
+  check(await page.evaluate(() => document.activeElement?.id) === 'search', 'a new project opens with the cursor on its search line');
 
-  // Names and connections are lines too, with an optional [type] after any name.
+  // The search adds what it can't find: names, and connections, with an optional [type] after any name.
   for (const [line, count] of [['Ada Lovelace [person]', 1], ['Grace Hopper', 2], ['Acme Foundation [organization] -> Ada Lovelace : funds', 3]]) {
-    await page.fill('#add-line', line);
-    await page.press('#add-line', 'Enter');
-    await page.waitForFunction(n => document.querySelectorAll('li.el').length >= n, count);
+    await page.fill('#search', line);
+    await page.press('#search', 'Enter');
+    await page.waitForFunction(n => document.querySelectorAll('.cards .card').length >= n, count);
   }
-  check(await page.locator('li.el').count() === 3, 'two typed names plus an arrow line make three names');
-  check(await conns('Ada Lovelace').count() === 1 && (await conns('Ada Lovelace').first().innerText()).includes('Acme Foundation'),
-    'the arrow line connected Acme to Ada');
-  check((await item('Acme Foundation').locator('.type').innerText()).includes('[organization]'), 'a [type] typed in an arrow line is saved');
-  check(await page.evaluate(() => document.activeElement?.id) === 'add-line', 'the cursor stays on the next line for quick entry');
+  check(await page.locator('.cards .card').count() === 3, 'two typed names plus an arrow line make three cards');
+  check((await card('Ada Lovelace').locator('.ties').innerText()).includes('Acme Foundation'), 'the arrow line connected Acme to Ada');
+  check((await card('Acme Foundation').locator('.type').innerText()).includes('[organization]'), 'a [type] typed in an arrow line is saved');
+  check(await page.evaluate(() => document.activeElement?.id) === 'search', 'the cursor stays on the search for quick entry');
+  check(await page.inputValue('#search') === '', 'the search is cleared after adding');
 
-  await page.fill('#add-line', '-> nobody');
-  await page.press('#add-line', 'Enter');
+  await page.fill('#search', '-> nobody');
+  await page.press('#search', 'Enter');
   check(await page.isVisible('#toast[data-kind="error"]'), 'a line that isn’t a name or connection explains the syntax');
 
   // A name that would run script if it were ever treated as HTML.
-  await page.fill('#add-line', '<img src=x onerror="alert(1)">');
-  await page.press('#add-line', 'Enter');
-  await page.waitForSelector('li.el >> text=<img');
-  check(await page.locator('.outline img').count() === 0, 'a name containing HTML is shown as text');
+  await page.fill('#search', '<img src=x onerror="alert(1)">');
+  await page.press('#search', 'Enter');
+  await page.waitForSelector('.card >> text=<img');
+  check(await page.locator('.cards img').count() === 0, 'a name containing HTML is shown as text');
 
-  await page.fill('#add-line', 'Grace Hopper -> Babbage : writes to');
-  await page.press('#add-line', 'Enter');
-  await page.waitForFunction(() => document.querySelectorAll('li.el').length === 5);
+  await page.fill('#search', 'Grace Hopper -> Babbage : writes to');
+  await page.press('#search', 'Enter');
+  await page.waitForFunction(() => document.querySelectorAll('.cards .card').length === 5);
+
+  // Typing filters the cards to matching names; a word inside a name matches too.
+  await page.fill('#search', 'hop');
+  check(await visibleCards() === 1 && (await page.innerText('.cards .card:not([hidden]) .name')) === 'Grace Hopper', 'the search filters the cards', String(await visibleCards()));
+  check(await page.locator('.cards mark').innerText() === 'Hop', 'the matching part of a name is marked');
+  check(await page.locator('.card.add').isVisible(), 'a search with no exact match offers to add it');
+  await page.fill('#search', 'organization');
+  check(await visibleCards() === 1, 'the search matches types too');
+  await page.press('#search', 'Escape');
+  check(await visibleCards() === 5, 'Escape clears the search and shows every card');
 
   // Opening a name puts it at the centre of its web. It doesn't grab the cursor; Enter does.
-  await item('Ada Lovelace').locator('a.name').click();
+  await page.fill('#search', 'lovel');
+  await page.press('#search', 'Enter');
   await page.waitForSelector('.center #element-name');
-  check((await page.inputValue('#element-name')).startsWith('Ada Lovelace'), 'clicking a name puts it at the centre');
+  check((await page.inputValue('#element-name')).startsWith('Ada Lovelace'), 'Enter on the search opens the top match at the centre');
   check((await zone('up').innerText()).includes('Acme Foundation'), 'what points to a name is on its "comes from" side');
-  check(await page.evaluate(() => document.activeElement?.id) !== 'add-down', 'opening a name leaves the cursor where it was');
+  await page.click('.zone-label');
+  check(await page.evaluate(() => document.activeElement?.id) !== 'add-down', 'opening a name doesn’t put the cursor on a connection line');
   await page.keyboard.press('Enter');
   check(await page.evaluate(() => document.activeElement?.id) === 'add-down', 'Enter puts the cursor on the "points to" line');
 
@@ -153,8 +165,22 @@ try {
   check(await page.locator('.trail').count() === 0, 'Back walks the path backwards');
   await page.click('.zone-label');
   await page.keyboard.press('Escape');
-  await page.waitForSelector('.outline li.el');
-  check(await page.locator('li.el').count() === 6, 'Escape returns to the list, which has every name');
+  await page.waitForSelector('.cards .card');
+  check(await visibleCards() === 6, 'Escape returns to the cards, which show every name');
+  check(await page.locator('.card.flash .name').innerText() === 'Ada Lovelace', 'the card you came back from is marked');
+
+  // The search sits above the web too; typing there goes back to the filtered cards.
+  await card('Grace Hopper').click();
+  await page.waitForSelector('.center');
+  await page.keyboard.press('/');
+  check(await page.evaluate(() => document.activeElement?.id) === 'search', '/ jumps to the search');
+  await page.keyboard.type('bab');
+  await page.waitForSelector('.cards .card:not([hidden])');
+  check(await visibleCards() === 1 && await page.inputValue('#search') === 'bab', 'typing in the web’s search shows the matching cards');
+  check(await page.evaluate(() => document.activeElement?.id) === 'search', 'the cursor stays in the search while it hands over');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.getElementById('element-name')?.value?.startsWith('Babbage'));
+  check(true, 'Enter opens the match');
   check(problems.length === 0, 'no errors while walking the web', problems.join(' | '));
 
   await page.goto(BASE);
@@ -162,12 +188,25 @@ try {
   await page.screenshot({ path: `${SHOTS}2-projects.png` });
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.click('.outline a.name');
-  await page.waitForSelector('li.el');
-  await page.screenshot({ path: `${SHOTS}3-list-dark.png`, fullPage: true });
-  await item('Ada Lovelace').locator('a.name').click();
+  await page.waitForSelector('.cards .card');
+  await page.screenshot({ path: `${SHOTS}3-cards-dark.png`, fullPage: true });
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.fill('#search', 'a');
+  await page.screenshot({ path: `${SHOTS}3-cards-search.png`, fullPage: true });
+  await page.press('#search', 'Escape');
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await card('Ada Lovelace').click();
   await page.waitForSelector('.center');
   await page.waitForTimeout(1200);
   await page.screenshot({ path: `${SHOTS}4-web-dark.png`, fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: `${SHOTS}5-web-phone.png`, fullPage: true });
+  await page.click('.crumb a');
+  await page.waitForSelector('.cards .card');
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: `${SHOTS}6-cards-phone.png`, fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ colorScheme: 'light' });
   await page.screenshot({ path: `${SHOTS}5-web-phone.png`, fullPage: true });

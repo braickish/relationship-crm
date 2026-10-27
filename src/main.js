@@ -46,9 +46,10 @@ async function render() {
       const animate = !!app.querySelector(`[data-project="${project.id}"]`);
       const el = r.elementId && project.elements.get(r.elementId);
       if (!el) {
-        const from = trail.at(-1);
+        const from = justAdded ?? trail.at(-1);
+        justAdded = null;
         trail = [];
-        return show(shell(projectView()), { scrollToId: from, animate });
+        return show(shell(projectView()), { scrollToId: from, animate, flash: from });
       }
       walk(el.id);
       return show(shell(focusView(el)), { animate, top: true });
@@ -65,16 +66,26 @@ async function render() {
 
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
 
-function show(node, { scrollToId, animate = false, top = false } = {}) {
+function show(node, { scrollToId, animate = false, top = false, flash = null } = {}) {
   const swap = () => {
+    // Someone typing in the search keeps typing, even if keystrokes landed while the page changed.
+    const searching = document.activeElement?.id === 'search';
     app.replaceChildren(node);
     drawWeb();
-    const target = pendingFocus && app.querySelector(pendingFocus);
-    if (target) { target.focus({ preventScroll: top }); pendingFocus = null; }
-    else if (scrollToId) app.querySelector(`[data-id="${scrollToId}"]`)?.scrollIntoView({ block: 'nearest' });
+    const search = searching && app.querySelector('#search');
+    if (search && search.value !== query) { search.value = query; search.dispatchEvent(new Event('input')); }
+    const target = (pendingFocus && app.querySelector(pendingFocus)) || search;
+    if (target) {
+      target.focus({ preventScroll: top || !!scrollToId });
+      if (target.type === 'text') target.setSelectionRange(target.value.length, target.value.length);
+      pendingFocus = null;
+    }
+    if (scrollToId) app.querySelector(`[data-id="${scrollToId}"]`)?.scrollIntoView({ block: 'nearest' });
+    if (flash) app.querySelector(`.card[data-id="${flash}"]`)?.classList.add('flash');
     if (top && app.querySelector('.center')?.getBoundingClientRect().top < 0) scrollTo(0, 0);
   };
-  if (animate && document.startViewTransition && !REDUCED_MOTION.matches) document.startViewTransition(swap);
+  // A transition cut short by the next one (fast typing, quick clicks) just skips to the end.
+  if (animate && document.startViewTransition && !REDUCED_MOTION.matches) document.startViewTransition(swap).ready.catch(() => {});
   else swap();
 }
 
@@ -154,7 +165,7 @@ async function projectsView() {
     if (!input.value.trim()) return;
     let created;
     const ok = await run(async () => { created = must(await supabase.rpc('create_project', { p_name: input.value })); }, { busy: input });
-    if (ok) { pendingFocus = '#add-line'; go(`#/p/${created.id}`); }
+    if (ok) { pendingFocus = '#search'; go(`#/p/${created.id}`); }
   };
   pendingFocus ??= '#new-project';
 
@@ -243,11 +254,18 @@ function withCompletion(input) {
   return input;
 }
 
-// ---------------------------------------------------------------- project view (the index of names)
+// ---------------------------------------------------------------- project view (search and a stack of cards)
+//
+// A project opens on a search line above one card per name. Typing filters the cards; Enter or a
+// click opens the chosen name at the centre of its web. When nothing matches exactly, the search
+// offers to add what was typed, so "Ada -> Grace : mentor" still works here.
+
+let query = '';      // the search, kept while it's being typed so the focus view can hand it over
+let justAdded = null; // a name to scroll to and flash after it's added from the search
 
 function projectView() {
   const editable = canEdit();
-  const elements = [...project.elements.values()];
+  const elements = [...project.elements.values()].sort((a, b) => a.label.localeCompare(b.label));
 
   const title = autosize(h('textarea', { id: 'project-title', class: 'title', rows: 1, maxlength: 120, 'aria-label': 'Project name', disabled: !editable, spellcheck: false }));
   title.value = project.name;
@@ -259,32 +277,90 @@ function projectView() {
   title.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } if (e.key === 'Escape') { title.value = project.name; title.blur(); } });
   title.addEventListener('blur', rename);
 
-  const add = withCompletion(h('input', { id: 'add-line', maxlength: 400, autocomplete: 'off', 'aria-label': 'Add a name or a connection',
-    placeholder: elements.length ? 'add a name, or  Ada [person] -> Grace : mentor' : 'add the first name…' }));
-  const addLine = async e => {
-    e.preventDefault();
-    const parsed = parseProjectLine(add.value);
-    if (!parsed) return toast('Write a name, or two names joined by -> (for example: Ada -> Grace).', 'error');
-    const ok = await run(async () => {
-      if (parsed.kind === 'element') {
-        const existing = byLabel(parsed.name.label);
-        if (existing && !parsed.name.typeGiven) throw new Error(`${existing.label} is already on the list.`);
-        await ensureElement(parsed.name);
-      } else await connect(parsed.from, parsed.arrow, parsed.to, parsed.type);
-    }, { busy: add });
-    if (ok) { pendingFocus = '#add-line'; await reload(); }
+  const ties = neighbourhoods();
+  const cards = elements.map(el => elementCard(el, ties.get(el.id) || []));
+  const list = h('div', { id: 'cards', class: 'cards' }, cards);
+  const addCard = editable && h('button', { class: 'card add', type: 'button', hidden: true, onclick: () => addFromSearch() });
+  const status = h('p', { class: 'quiet count', 'aria-live': 'polite' });
+  const search = searchLine({
+    placeholder: elements.length ? (editable ? 'find or add a name…' : 'find a name…') : 'add the first name…',
+    onInput: () => filter(),
+    onKey: e => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); move(e.key === 'ArrowDown' ? 1 : -1); }
+      if (e.key === 'Enter') { e.preventDefault(); choose(); }
+    },
+  });
+
+  // The choices in order: the add card (when shown), then the matching cards.
+  const choices = () => [addCard, ...list.children].filter(c => c && !c.hidden);
+  let active = null;
+  const setActive = card => {
+    active?.classList.remove('active');
+    active = card;
+    if (!card) return search.removeAttribute('aria-activedescendant');
+    card.classList.add('active');
+    search.setAttribute('aria-activedescendant', card.id);
+    card.scrollIntoView({ block: 'nearest' });
   };
+  const move = step => {
+    const all = choices();
+    if (!all.length) return;
+    setActive(all[(all.indexOf(active) + step + all.length) % all.length] ?? all[0]);
+  };
+  const choose = () => {
+    if (active === addCard) return addFromSearch();
+    if (active) { query = ''; return go(active.getAttribute('href')); }
+    if (search.value.trim() && editable) toast('Write a name, or two names joined by -> (for example: Ada -> Grace).', 'error');
+  };
+
+  function filter() {
+    query = search.value;
+    const q = query.trim().toLowerCase();
+    const ranked = [];
+    for (const card of cards) {
+      const el = project.elements.get(card.dataset.id);
+      const rank = q ? matchRank(el, q) : 0;
+      card.hidden = rank < 0;
+      highlight(card.querySelector('.name'), el.label, q);
+      if (rank >= 0) ranked.push([rank, card]);
+    }
+    if (q) ranked.sort((a, b) => a[0] - b[0]);
+    list.append(...ranked.map(([, card]) => card));
+
+    const parsed = q && editable && parseProjectLine(query);
+    const offer = parsed && (parsed.kind === 'connection' || !byLabel(parsed.name.label) || parsed.name.typeGiven);
+    if (addCard) {
+      addCard.hidden = !offer;
+      if (offer) addCard.replaceChildren(h('span', { class: 'plus' }, '+ add '), describeLine(parsed));
+    }
+    status.textContent = q ? (ranked.length ? `${ranked.length.toLocaleString()} of ${plural(elements.length, 'name')}` : 'no matches') : '';
+    setActive(q ? (ranked[0]?.[1] ?? (offer ? addCard : null)) : null);
+  }
+
+  async function addFromSearch() {
+    const parsed = parseProjectLine(search.value);
+    if (!parsed) return;
+    let added;
+    const ok = await run(async () => {
+      if (parsed.kind === 'element') added = await ensureElement(parsed.name);
+      else { await connect(parsed.from, parsed.arrow, parsed.to, parsed.type); added = byLabel(parsed.from.label); }
+    }, { busy: search, success: parsed.kind === 'element' ? `Added ${parsed.name.label}` : 'Connected' });
+    if (ok) { query = ''; justAdded = added?.id; pendingFocus = '#search'; await reload(); }
+  }
+
+  queueMicrotask(filter);
 
   return h('div', { class: 'doc project', dataset: { project: project.id } },
     h('p', { class: 'crumb' }, h('a', { href: '#/' }, '← projects')),
     title,
     h('p', { class: 'meta' }, plural(elements.length, 'name'), ', ', plural(project.connections.length, 'connection'),
       project.role !== 'owner' ? ` · you’re ${project.role === 'editor' ? 'an editor' : 'a viewer'}` : ''),
-    h('ul', { class: 'outline' },
-      elements.map(el => elementItem(el, editable)),
-      editable && h('li', { class: 'adder' }, h('form', { onsubmit: addLine }, add))),
+    h('div', { class: 'search' }, search, status),
+    addCard,
+    list,
+    !elements.length && h('p', { class: 'quiet' }, editable ? 'Type a name above and press Enter.' : 'Nothing here yet.'),
     editable && h('p', { class: 'quiet syntax' },
-      [['->', 'points to'], ['<-', 'comes from'], ['<->', 'both ways'], ['--', 'no direction'], ['[type]', 'after a name'], [': kind', 'names a connection'], ['Tab', 'completes']]
+      [['->', 'points to'], ['<-', 'comes from'], ['<->', 'both ways'], ['--', 'no direction'], ['[type]', 'after a name'], [': kind', 'names a connection'], ['Tab', 'completes'], ['/', 'search']]
         .map(([key, what]) => h('span', {}, h('kbd', {}, key), what))),
     project.role === 'owner' && h('p', { class: 'footer' }, twoStep('delete this project', `really delete “${project.name}”?`, async () => {
       must(await supabase.from('projects').delete().eq('id', project.id));
@@ -294,17 +370,83 @@ function projectView() {
     })));
 }
 
-function elementItem(el, editable) {
-  const links = connectionsOf(el.id);
-  return h('li', { class: 'el', dataset: { id: el.id } },
-    named(h('a', { class: 'name', href: `#/p/${project.id}/e/${el.id}` }, el.label, el.element_type && h('span', { class: 'type' }, ` [${el.element_type}]`)), el.id),
-    el.description && h('span', { class: 'meta' }, ' — ', el.description.split('\n')[0].slice(0, 80)),
-    links.length > 0 && h('ul', {},
-      links.map(c => h('li', { class: 'conn' },
-        arrowControl(c, el, editable),
-        h('span', { class: 'text' },
-          h('a', { href: `#/p/${project.id}/e/${c.other.id}` }, c.other.label),
-          c.connection_type && h('span', { class: 'kind' }, ' : ', c.connection_type))))));
+// The search line, shared by the card list and the web. In the web, typing hands the search to the list.
+function searchLine({ placeholder = 'find a name…', onInput, onKey } = {}) {
+  const input = withCompletion(h('input', { id: 'search', class: 'search-line', maxlength: 400, autocomplete: 'off', spellcheck: false,
+    role: 'combobox', 'aria-controls': 'cards', 'aria-expanded': 'true', 'aria-autocomplete': 'list', 'aria-label': 'Find or add a name', placeholder }));
+  input.value = query;
+  input.addEventListener('input', () => {
+    if (onInput) return onInput();
+    query = input.value;
+    pendingFocus = '#search';
+    go(`#/p/${project.id}`);
+  });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      if (input.value) { input.value = ''; input.dispatchEvent(new Event('input')); } else input.blur();
+      return;
+    }
+    onKey?.(e);
+  });
+  return input;
+}
+
+// Lower is better: the name starts with the search, a word in it does, it contains it, then type or notes.
+function matchRank(el, q) {
+  const label = el.label.toLowerCase();
+  if (label.startsWith(q)) return 0;
+  if (label.split(/[\s\-–—/(]+/).some(word => word.startsWith(q))) return 1;
+  if (label.includes(q)) return 2;
+  if ((el.element_type || '').toLowerCase().includes(q)) return 3;
+  if ((el.description || '').toLowerCase().includes(q)) return 4;
+  return -1;
+}
+
+function highlight(node, label, q) {
+  const at = q ? label.toLowerCase().indexOf(q) : -1;
+  node.replaceChildren(...(at < 0 ? [label] : [label.slice(0, at), h('mark', {}, label.slice(at, at + q.length)), label.slice(at + q.length)]));
+}
+
+function describeLine(parsed) {
+  const name = n => h('strong', {}, n.label, n.typeGiven && n.type ? ` [${n.type}]` : '');
+  if (parsed.kind === 'element') return name(parsed.name);
+  return [name(parsed.from), ` ${ARROW_GLYPH[TYPED_ARROW[parsed.arrow]]} `, name(parsed.to), parsed.type && ` : ${parsed.type}`];
+}
+
+// Every name's connections, worked out in one pass over the project.
+function neighbourhoods() {
+  const ties = new Map();
+  for (const id of project.elements.keys()) ties.set(id, []);
+  for (const c of project.connections) {
+    for (const self of [c.from_element_id, c.to_element_id]) {
+      const outgoing = c.from_element_id === self;
+      const other = project.elements.get(outgoing ? c.to_element_id : c.from_element_id);
+      if (!other || !ties.has(self)) continue;
+      const arrows = c.direction === 'mutual' ? 'both' : c.direction === 'undirected' ? 'none' : outgoing ? 'out' : 'in';
+      ties.get(self).push({ ...c, other, arrows });
+    }
+  }
+  return ties;
+}
+
+// A card in the stack: the same box as the centre of the web, so opening one feels like stepping in.
+function elementCard(el, links) {
+  const by = Object.fromEntries(ZONES.map(z => [z.key, links.filter(c => ZONE_OF[c.arrows] === z.key).map(c => c.other.label)]));
+  const names = list => list.length > 3 ? `${list.slice(0, 3).join(', ')} +${list.length - 3}` : list.join(', ');
+  const card = h('a', { class: 'card', id: `card-${el.id}`, href: `#/p/${project.id}/e/${el.id}`, dataset: { id: el.id },
+      onclick: () => { query = ''; } },
+    h('span', { class: 'card-head' },
+      named(h('span', { class: 'name' }, el.label), el.id),
+      el.element_type && h('span', { class: 'type' }, ` [${el.element_type}]`)),
+    h('span', { class: 'meta' }, links.length ? [by.up.length, ' in · ', by.down.length, ' out · ', by.along.length, ' alongside'] : 'not connected yet'),
+    el.description && h('span', { class: 'notes-text' }, el.description.length > 180 ? `${el.description.slice(0, 180).trimEnd()}…` : el.description),
+    links.length > 0 && h('span', { class: 'ties' },
+      ['up', 'down', 'along']
+        .filter(key => by[key].length)
+        .map(key => h('span', { class: `tie ${key}` }, h('span', { class: 'quiet' }, ZONES.find(z => z.key === key).label), ' ', names(by[key])))));
+  card.style.viewTransitionName = `card-${el.id}`;
+  return card;
 }
 
 // Tags a name so a view transition can carry it from one place on screen to another.
@@ -365,6 +507,7 @@ function focusView(el) {
 
   return h('div', { class: 'doc focus', dataset: { project: project.id } },
     h('p', { class: 'crumb' }, h('a', { href: `#/p/${project.id}` }, '← ', project.name)),
+    h('div', { class: 'search' }, searchLine()),
     h('div', { class: 'web' },
       svg('svg', { class: 'web-lines', 'aria-hidden': 'true' }),
       zoneView(ZONES[0], zones.up, el, editable, degree, seen),
@@ -376,7 +519,7 @@ function focusView(el) {
 
 function centreCard(el, zones, editable) {
   const total = zones.up.length + zones.down.length + zones.along.length;
-  return h('section', { class: 'center', 'aria-label': el.label },
+  const card = h('section', { class: 'center', 'aria-label': el.label },
     editable ? nameEditor(el)
       : h('h1', { class: 'name' }, named(h('span', {}, el.label), el.id), el.element_type && h('span', { class: 'type' }, ` [${el.element_type}]`)),
     h('p', { class: 'meta' }, total ? [zones.up.length, ' in · ', zones.down.length, ' out · ', zones.along.length, ' alongside'] : 'not connected yet'),
@@ -388,6 +531,8 @@ function centreCard(el, zones, editable) {
         await loadProject(project.id);
         go(`#/p/${project.id}`);
       })));
+  card.style.viewTransitionName = `card-${el.id}`;
+  return card;
 }
 
 function zoneView(zone, conns, centre, editable, degree, seen) {
@@ -555,6 +700,15 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Enter' || (active && active !== document.body && (typing || active.matches('button, a')))) return;
   const line = document.getElementById('add-down');
   if (line) { e.preventDefault(); line.focus(); }
+});
+
+// In a project, "/" jumps to the search line.
+document.addEventListener('keydown', e => {
+  if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey || !project) return;
+  const active = document.activeElement;
+  if (active && active !== document.body && active.matches('input, textarea, select, [contenteditable]')) return;
+  const search = document.getElementById('search');
+  if (search) { e.preventDefault(); search.focus(); }
 });
 
 function notesEditor(el, editable) {
