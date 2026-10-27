@@ -35,7 +35,7 @@ try {
   const nameRe = label => new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( \\[.*\\])?$`);
   const item = label => page.locator('li.el').filter({ has: page.locator(':scope > a.name', { hasText: nameRe(label) }) }).first();
   const conns = label => page.locator('li.el').filter({ has: page.locator(':scope > a.name', { hasText: nameRe(label) }) }).locator('.conn');
-  const openItem = () => page.locator('li.el.open');
+  const zone = key => page.locator(`.zone.${key}`);
 
   // Sign in with a magic link from the local inbox.
   const email = `ui-${Date.now()}@example.com`;
@@ -86,61 +86,76 @@ try {
   await page.waitForSelector('li.el >> text=<img');
   check(await page.locator('.outline img').count() === 0, 'a name containing HTML is shown as text');
 
-  // Opening a name doesn't grab the cursor; Enter does.
+  await page.fill('#add-line', 'Grace Hopper -> Babbage : writes to');
+  await page.press('#add-line', 'Enter');
+  await page.waitForFunction(() => document.querySelectorAll('li.el').length === 5);
+
+  // Opening a name puts it at the centre of its web. It doesn't grab the cursor; Enter does.
   await item('Ada Lovelace').locator('a.name').click();
-  await page.waitForSelector('#connect-line');
-  check(await page.evaluate(() => document.activeElement?.id) !== 'connect-line', 'opening a name leaves the cursor where it was');
-  check((await page.getAttribute('#connect-line', 'placeholder')).includes('press enter'), 'the connection line reminds you to press Enter');
+  await page.waitForSelector('.center #element-name');
+  check((await page.inputValue('#element-name')).startsWith('Ada Lovelace'), 'clicking a name puts it at the centre');
+  check((await zone('up').innerText()).includes('Acme Foundation'), 'what points to a name is on its "comes from" side');
+  check(await page.evaluate(() => document.activeElement?.id) !== 'add-down', 'opening a name leaves the cursor where it was');
   await page.keyboard.press('Enter');
-  check(await page.evaluate(() => document.activeElement?.id) === 'connect-line', 'Enter puts the cursor on the connection line');
+  check(await page.evaluate(() => document.activeElement?.id) === 'add-down', 'Enter puts the cursor on the "points to" line');
 
-  await page.fill('#connect-line', '-> Gra');
-  await page.press('#connect-line', 'Tab');
-  check(await page.inputValue('#connect-line') === 'Grace Hopper', 'a typed arrow moves into the arrow column, and Tab completes the name', await page.inputValue('#connect-line'));
-  await page.type('#connect-line', ' : mentor');
-  const typedLeft = await page.evaluate(() => document.getElementById('connect-line').getBoundingClientRect().left);
-  await page.press('#connect-line', 'Enter');
-  await page.waitForFunction(() => document.querySelectorAll('li.el.open .conn').length === 2);
-  const savedLeft = await page.evaluate(() => [...document.querySelectorAll('li.el.open .conn .text a')].find(a => a.textContent === 'Grace Hopper').getBoundingClientRect().left);
-  check(Math.abs(typedLeft - savedLeft) < 1.5, 'a new connection lines up with the saved ones', `typed at ${typedLeft}px, saved at ${savedLeft}px`);
-  check(await page.evaluate(() => document.activeElement?.id) === 'connect-line', 'the cursor stays on the connection line after adding');
+  // Where you type sets the direction.
+  await page.fill('#add-down', 'Gra');
+  await page.press('#add-down', 'Tab');
+  check(await page.inputValue('#add-down') === 'Grace Hopper', 'Tab completes a name', await page.inputValue('#add-down'));
+  await page.type('#add-down', ' : mentor');
+  await page.press('#add-down', 'Enter');
+  await page.waitForFunction(() => document.querySelector('.zone.down')?.textContent.includes('Grace Hopper'));
+  check((await zone('down').innerText()).includes('mentor'), 'a name typed on the "points to" side is pointed to, with its kind');
+  check(await page.evaluate(() => document.activeElement?.id) === 'add-down', 'the cursor stays on the line after adding');
 
-  await page.click('li.el.open .adder .arrow');
-  await page.click('li.el.open .adder .arrow');
-  await page.fill('#connect-line', 'City Council [government] : advises');
-  await page.press('#connect-line', 'Enter');
-  await page.waitForFunction(() => document.querySelectorAll('li.el.open .conn').length === 3);
-  check(await page.locator('li.el').count() === 5, 'connecting to a new name adds it to the list');
-  check((await item('City Council').locator('.type').innerText()).includes('[government]'), 'a [type] on a connection line is saved');
-  let arrows = await openItem().locator('.conn .arrow').allInnerTexts();
-  check(arrows.join('') === '←→↔', 'the arrow chosen by clicking is used', arrows.join(''));
-  check((await conns('Grace Hopper').allInnerTexts()).some(t => t.includes('Ada Lovelace') && t.includes('mentor')),
-    'the connection also appears under the other name');
+  await page.fill('#add-along', 'City Council [government] : advises');
+  await page.press('#add-along', 'Enter');
+  await page.waitForFunction(() => document.querySelector('.zone.along')?.textContent.includes('City Council'));
+  check((await zone('along').locator('.row .arrow').innerText()) === '↔', 'a name typed alongside is connected both ways');
 
-  // Clicking a saved arrow cycles its direction.
-  await openItem().locator('.conn', { hasText: 'Grace Hopper' }).locator('.arrow').click();
-  await page.waitForFunction(() => [...document.querySelectorAll('li.el.open .conn')].find(li => li.textContent.includes('Grace Hopper'))?.querySelector('.arrow').textContent === '←');
-  check((await conns('Grace Hopper').first().locator('.arrow').innerText()) === '→', 'reversing an arrow flips it under the other name too');
+  await page.fill('#add-up', '-> Babbage : corresponds');
+  await page.press('#add-up', 'Enter');
+  await page.waitForFunction(() => document.querySelector('.zone.down')?.textContent.includes('Babbage'));
+  check(true, 'a typed leading arrow overrides the side it was typed on');
+  check(await page.locator('.web-lines path.link').count() === await page.locator('.zone .row').count(), 'a line is drawn to every neighbour');
+  check(await page.locator('.web-lines path.stub').count() === 2, 'neighbours with connections of their own show the web carrying on');
+
+  // Clicking an arrow reverses it, and the neighbour moves to the other side.
+  await zone('down').locator('.row', { hasText: 'Grace Hopper' }).locator('.arrow').click();
+  await page.waitForFunction(() => document.querySelector('.zone.up')?.textContent.includes('Grace Hopper'));
+  check(!(await zone('down').innerText()).includes('Grace Hopper'), 'reversing an arrow moves the neighbour to the other side');
 
   // Renaming takes a [type] too.
   await page.fill('#element-name', 'Ada Lovelace [mathematician]');
   await page.press('#element-name', 'Enter');
   await page.waitForSelector('#toast >> text=Saved');
-  check(await page.inputValue('#element-name') === 'Ada Lovelace [mathematician]', 'renaming can change the type');
+  await page.waitForFunction(() => document.getElementById('element-name')?.value === 'Ada Lovelace [mathematician]');
+  check(true, 'renaming can change the type');
 
   // Notes save when you leave the field.
   await page.fill('#element-notes', 'Wrote the first program.');
-  await page.click('.title');
+  await page.click('.zone-label');
   await page.waitForSelector('#toast >> text=Notes saved');
   await page.reload();
   await page.waitForSelector('#element-notes');
   check(await page.inputValue('#element-notes') === 'Wrote the first program.', 'notes are saved');
-  await page.screenshot({ path: `${SHOTS}1-project-light.png`, fullPage: true });
+  await page.waitForTimeout(1200);
+  await page.screenshot({ path: `${SHOTS}1-web-light.png`, fullPage: true });
 
-  // Clicking a connection opens that name.
-  await openItem().locator('.conn a', { hasText: 'Grace Hopper' }).click();
-  await page.waitForFunction(() => document.querySelector('li.el.open input.name')?.value?.startsWith('Grace Hopper'));
-  check(true, 'clicking a connection opens that name');
+  // Walking: a neighbour moves to the centre and the name you left lands on its other side.
+  await zone('up').locator('a.name', { hasText: 'Grace Hopper' }).click();
+  await page.waitForFunction(() => document.getElementById('element-name')?.value?.startsWith('Grace Hopper'));
+  check((await zone('down').innerText()).includes('Ada Lovelace'), 'the name you left is now beside the new centre');
+  check((await page.innerText('.trail')).includes('Ada Lovelace › Grace Hopper'), 'your path through the web is shown');
+  await page.goBack();
+  await page.waitForFunction(() => document.getElementById('element-name')?.value?.startsWith('Ada Lovelace'));
+  check(await page.locator('.trail').count() === 0, 'Back walks the path backwards');
+  await page.click('.zone-label');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.outline li.el');
+  check(await page.locator('li.el').count() === 6, 'Escape returns to the list, which has every name');
+  check(problems.length === 0, 'no errors while walking the web', problems.join(' | '));
 
   await page.goto(BASE);
   await page.waitForSelector('.outline a.name');
@@ -148,12 +163,14 @@ try {
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.click('.outline a.name');
   await page.waitForSelector('li.el');
+  await page.screenshot({ path: `${SHOTS}3-list-dark.png`, fullPage: true });
   await item('Ada Lovelace').locator('a.name').click();
-  await page.waitForSelector('#connect-line');
-  await page.screenshot({ path: `${SHOTS}3-project-dark.png`, fullPage: true });
+  await page.waitForSelector('.center');
+  await page.waitForTimeout(1200);
+  await page.screenshot({ path: `${SHOTS}4-web-dark.png`, fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ colorScheme: 'light' });
-  await page.screenshot({ path: `${SHOTS}4-project-phone.png`, fullPage: true });
+  await page.screenshot({ path: `${SHOTS}5-web-phone.png`, fullPage: true });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
   check(overflow <= 0, 'nothing scrolls sideways at phone width', `${overflow}px too wide`);
 

@@ -1,6 +1,8 @@
 /* Layout: one narrow column, like a page in a working field notebook. Everything is a list:
    names are bullets, connections are indented under them, and the next line is always an input.
-   Black ink on a white page; the only colour is faded rust, kept for destructive actions. */
+   Black ink on a white page; the only colour is faded rust, kept for destructive actions.
+   An open name leaves the column for "the web": the name in a card at the centre, with what
+   points to it on the left, what it points to on the right, and two-way ties underneath. */
 :root {
   --paper: #ffffff;
   --ink: #151515;
@@ -100,28 +102,91 @@ button.arrow { cursor: pointer; }
 button.arrow:hover { color: var(--ink); }
 .conn .text { min-width: 0; overflow-wrap: anywhere; }
 .conn .kind { color: var(--quiet); }
-.conn .remove { margin-left: 10px; font-size: 16px; opacity: 0; }
-.conn:hover .remove, .conn .remove:focus-visible { opacity: 1; }
 /* On touch screens, give the small controls finger-sized tap areas without moving the text. */
 @media (hover: none) {
-  .conn .remove { opacity: .6; }
-  button.arrow, .conn .remove { position: relative; }
-  button.arrow::after, .conn .remove::after { content: ""; position: absolute; inset: -14px -10px; }
+  button.arrow { position: relative; }
+  button.arrow::after { content: ""; position: absolute; inset: -14px -10px; }
 }
 .outline ul .adder input { font: 400 18px/1.55 var(--f-hand); }
 .outline .type { font: 14px var(--f-type); color: var(--quiet); letter-spacing: .02em; }
 
-.el.open > input.name { border-bottom: 1px dashed var(--rule); }
-.notes {
-  display: block; margin: 4px 0 4px 22px; width: calc(100% - 22px); resize: none; overflow: hidden;
-  font: 400 15px/1.55 var(--f-type); color: var(--pencil);
-}
-.notes-text { margin: 4px 0 4px 22px; font-size: 14px; color: var(--pencil); white-space: pre-wrap; }
-.footer { margin: 4px 0 18px 22px; font-size: 13px; color: var(--quiet); }
+.notes { display: block; resize: none; overflow: hidden; font: 400 15px/1.55 var(--f-type); color: var(--pencil); }
+.notes-text { font-size: 14px; color: var(--pencil); white-space: pre-wrap; }
+.footer { font-size: 13px; color: var(--quiet); }
 .doc > .footer { margin: 56px 0 0; }
 .syntax { margin-top: 18px !important; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .syntax span { white-space: nowrap; }
 .syntax kbd { margin-right: 5px; }
+
+/* ---------- the web ---------- */
+.page:has(.focus) { max-width: 1120px; }
+.focus .crumb a { overflow-wrap: anywhere; }
+.web { position: relative; display: grid; gap: 30px; margin-top: 30px; grid-template-areas: "up" "center" "down" "along"; }
+.web > section { position: relative; z-index: 1; min-width: 0; }
+.web-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 0; }
+.web-lines path { fill: none; stroke: var(--quiet); stroke-width: 1.1; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1;
+  animation: ink .7s .12s cubic-bezier(.3,.6,.3,1) forwards; }
+.web-lines path.stub { stroke: var(--rule); animation-delay: .5s; animation-duration: .4s; }
+@keyframes ink { to { stroke-dashoffset: 0; } }
+
+.center {
+  grid-area: center; padding: 16px 20px 10px; background: var(--paper);
+  border: 1.5px solid var(--ink); box-shadow: 4px 4px 0 var(--rule);
+}
+.center .name { display: block; max-width: 100%; margin: 0; font: 400 30px/1.25 var(--f-hand); color: var(--ink); overflow-wrap: anywhere; }
+.center textarea.name { width: 100%; resize: none; overflow: hidden; border-bottom: 1px dashed var(--rule); }
+.center h1.name > span:first-child { display: inline-block; }
+.center .meta { margin: 4px 0 6px; }
+.center .notes, .center .notes-text { margin: 8px 0 4px; width: 100%; }
+.center .footer { margin: 6px 0 0; }
+
+.zone.up { grid-area: up; }
+.zone.down { grid-area: down; }
+.zone.along { grid-area: along; }
+.zone ul { list-style: none; margin: 0; padding: 0 0 0 14px; border-left: 1px dashed var(--rule); }
+.zone-label { position: relative; margin: 0 0 6px; font: 400 12px/1.4 var(--f-type); letter-spacing: .08em; text-transform: uppercase; color: var(--quiet); }
+.zone .row { display: flex; align-items: baseline; gap: 8px; font: 400 19px/1.5 var(--f-hand); color: var(--pencil); }
+.zone .row .who { min-width: 0; overflow-wrap: anywhere; }
+.zone .row .name { color: var(--ink); }
+.zone .kind, .zone .more { color: var(--quiet); }
+.zone .more { font: 12px var(--f-type); }
+.zone.up .row .arrow { order: 2; }
+.zone .remove { font-size: 16px; opacity: 0; }
+.zone .row:hover .remove, .zone .remove:focus-visible { opacity: 1; }
+.zone .adder input { font: 400 18px/1.5 var(--f-hand); padding-block: 2px; }
+.zone .fold { padding-block: 2px; }
+.trail { margin: 48px 0 0 !important; max-width: none !important; font: 400 16px/1.6 var(--f-hand); color: var(--pencil); overflow-wrap: anywhere; }
+.trail .quiet { font-family: var(--f-type); margin-right: 4px; }
+.trail .here { text-decoration: underline; text-underline-offset: 4px; }
+
+@media (min-width: 760px) {
+  .web {
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 340px) minmax(0, 1fr);
+    grid-template-areas: "up center down" "along along along";
+    column-gap: 84px; row-gap: 64px; align-items: center; margin-top: 44px;
+  }
+  .zone ul { padding: 0; border: 0; }
+  .zone .more { display: none; }
+  .zone.up, .zone.up .row { text-align: right; justify-content: flex-end; }
+  .zone.up .adder input { text-align: right; }
+  .zone.along { text-align: center; }
+  .zone.along .zone-label { display: inline-block; padding: 2px 10px; background: var(--paper); }
+  .zone.along ul { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 34px; }
+  .zone.along .adder { flex-basis: 100%; display: flex; justify-content: center; }
+  .zone.along .adder form { width: min(300px, 100%); }
+  .zone.along .adder input { text-align: center; }
+}
+@media (hover: none) {
+  .zone .remove { opacity: .6; position: relative; }
+  .zone .remove::after { content: ""; position: absolute; inset: -14px -10px; }
+}
+
+/* Moving between names: the clicked name glides to the centre while the rest cross-fades. */
+::view-transition-group(*) { animation-duration: .5s; animation-timing-function: cubic-bezier(.25,.8,.25,1); }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .3s; }
+@media (prefers-reduced-motion: reduce) {
+  .web-lines path { animation: none; stroke-dashoffset: 0; }
+}
 
 /* ---------- sign in ---------- */
 .signin { padding-top: 14vh; }

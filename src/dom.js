@@ -26,10 +26,12 @@ export function toast(message, kind = 'info') {
   toastTimer = setTimeout(() => { el.hidden = true; }, kind === 'error' ? 6000 : 2200);
 }
 
-// Grows a textarea to fit its text.
+// Grows a textarea to fit its text. It waits until the textarea is on the page to measure it,
+// which can be a frame or two later when the page changes inside a view transition.
 export function autosize(textarea) {
   const fit = () => { textarea.style.height = 'auto'; textarea.style.height = `${textarea.scrollHeight}px`; };
   textarea.addEventListener('input', fit);
-  requestAnimationFrame(fit);
+  const first = (tries = 0) => (textarea.isConnected ? fit() : tries < 30 && requestAnimationFrame(() => first(tries + 1)));
+  requestAnimationFrame(() => first());
   return textarea;
 }
