@@ -32,7 +32,7 @@ export default defineConfig(({ command, mode, isPreview }) => {
     throw new Error('VITE_SUPABASE_PUBLISHABLE_KEY is a secret key. Use the publishable key instead.');
   }
   return {
-    base: command === 'build' || isPreview ? '/relationship-crm/' : '/',
+    base: command === 'build' || isPreview ? '/spigots/' : '/',
     plugins: [contentSecurityPolicy(new URL(env.VITE_SUPABASE_URL).origin)],
     build: { sourcemap: false, assetsInlineLimit: 0 },
     server: { host: '127.0.0.1', port: 5173, strictPort: true },

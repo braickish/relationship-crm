@@ -419,5 +419,10 @@ enabled = true
 project_id = "jteydzarksrortquyxuj"
 
 [remotes.production.auth]
-site_url = "https://braickish.github.io/relationship-crm/"
-additional_redirect_urls = ["https://braickish.github.io/relationship-crm/"]
+site_url = "https://braickish.github.io/spigots/"
+additional_redirect_urls = ["https://braickish.github.io/spigots/"]
+
+# The hosted project's connection pool, as Supabase set it. Declared here so `config push` leaves it alone.
+[remotes.production.db.pooler]
+default_pool_size = 15
+max_client_conn = 200

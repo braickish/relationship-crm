@@ -1,4 +1,5 @@
 /* Layout: one narrow column, like a page in a working field notebook, and the next line is always an input.
+   spigots: the silk glands a spider spins its web from.
    Black ink on a white page; the only colour is faded rust, kept for destructive actions.
    A project is a search line over a stack of cards, one per name. An open name becomes "the web": the name in a card at the centre, with what
    points to it on the left, what it points to on the right, and two-way ties underneath. */
@@ -9,6 +10,7 @@
   --quiet: #77756f;
   --rule: #c9c7c0;
   --rust: #8f3b26;
+  --spine: 380px; /* the width of every name box, and of the search above them */
 
   --f-mark: "Zilla Slab", Rockwell, "Roboto Slab", Georgia, serif;
   --f-hand: "Architects Daughter", "Bradley Hand", "Segoe Print", cursive;
@@ -73,7 +75,6 @@ h1, .title {
 .doc > p { margin: 0 0 12px; max-width: 52ch; color: var(--pencil); }
 .quiet, .meta { color: var(--quiet); font-size: 13px; letter-spacing: .02em; }
 .crumb { font-size: 13px; color: var(--quiet); }
-.project > .meta { margin-bottom: 28px; }
 
 /* ---------- the outline ---------- */
 .outline, .outline ul { list-style: none; margin: 0; padding: 0; }
@@ -108,25 +109,34 @@ button.arrow:hover { color: var(--ink); }
 .syntax span { white-space: nowrap; }
 .syntax kbd { margin-right: 5px; }
 
-/* ---------- search and cards ---------- */
+/* ---------- inside a project: one centred spine ----------
+   The header, search and name boxes share one centred column in both the cards and the web,
+   so a box you open stays the same width and in the same place. */
+.page:has(.project), .page:has(.focus) { max-width: 1120px; }
+.doc .spine { width: min(var(--spine), 100%); margin-inline: auto; }
+.project-head { text-align: center; }
+.project-head .title { text-align: center; font-size: clamp(1.8rem, 5vw, 2.3rem); line-height: 44px; overflow-wrap: anywhere; }
+.project-head .meta { margin: 0; }
+
 .search { position: sticky; top: 0; z-index: 3; background: var(--paper); padding: 14px 0 8px; margin-top: 18px; }
-.search-line { font: 400 24px/1.3 var(--f-hand); border-bottom: 1.5px solid var(--ink) !important; padding-bottom: 3px; }
+.search-line { font: 400 24px/1.3 var(--f-hand); text-align: center; border-bottom: 1.5px solid var(--ink) !important; padding-bottom: 3px; }
 .search-line::placeholder { font: 400 22px/1.3 var(--f-hand); letter-spacing: 0; }
-.search .count { margin: 6px 0 0; min-height: 1.5em; }
-.focus .search { max-width: 560px; margin-top: 8px; }
-.project .syntax { margin: 28px 0 0 !important; }
+.search .count { margin: 6px 0 0; min-height: 1.5em; text-align: center; }
+.project .syntax { margin-top: 28px !important; justify-content: center; }
+.project .footer { text-align: center; }
 
 .cards { display: flex; flex-direction: column; gap: 18px; padding-bottom: 8px; }
-.card {
+.card, .center {
   display: block; width: 100%; text-align: left; padding: 14px 18px 12px; background: var(--paper);
-  border: 1.5px solid var(--ink); box-shadow: 4px 4px 0 var(--rule); transition: box-shadow .15s, translate .15s;
+  border: 1.5px solid var(--ink); box-shadow: 4px 4px 0 var(--rule);
 }
+.card { transition: box-shadow .15s, translate .15s; }
 .card:hover, .card.active { text-decoration: none; box-shadow: 6px 6px 0 var(--pencil); translate: -1px -1px; }
 .card.active { outline: 1.5px dashed var(--ink); outline-offset: 4px; }
 .card > span { display: block; }
 .card .card-head { overflow-wrap: anywhere; }
 .card { scroll-margin-top: 130px; }
-.card .name { font: 400 25px/1.25 var(--f-hand); color: var(--ink); }
+.card .name, .center .name { font: 400 26px/1.25 var(--f-hand); color: var(--ink); }
 .card .type { font: 14px var(--f-type); color: var(--quiet); letter-spacing: .02em; }
 .card .meta { margin-top: 2px; }
 .card .notes-text { margin-top: 8px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
@@ -142,9 +152,7 @@ mark { background: none; color: inherit; text-decoration: underline; text-decora
 @keyframes flash { from { box-shadow: 6px 6px 0 var(--ink); } }
 
 /* ---------- the web ---------- */
-.page:has(.focus) { max-width: 1120px; }
-.focus .crumb a { overflow-wrap: anywhere; }
-.web { position: relative; display: grid; gap: 30px; margin-top: 30px; grid-template-areas: "up" "center" "down" "along"; }
+.web { position: relative; display: grid; gap: 30px; grid-template-areas: "center" "up" "down" "along"; }
 .web > section { position: relative; z-index: 1; min-width: 0; }
 .web-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 0; }
 .web-lines path { fill: none; stroke: var(--quiet); stroke-width: 1.1; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1;
@@ -152,14 +160,11 @@ mark { background: none; color: inherit; text-decoration: underline; text-decora
 .web-lines path.stub { stroke: var(--rule); animation-delay: .5s; animation-duration: .4s; }
 @keyframes ink { to { stroke-dashoffset: 0; } }
 
-.center {
-  grid-area: center; padding: 16px 20px 10px; background: var(--paper);
-  border: 1.5px solid var(--ink); box-shadow: 4px 4px 0 var(--rule);
-}
-.center .name { display: block; max-width: 100%; margin: 0; font: 400 30px/1.25 var(--f-hand); color: var(--ink); overflow-wrap: anywhere; }
+.center { grid-area: center; }
+.center .name { display: block; max-width: 100%; margin: 0; overflow-wrap: anywhere; }
 .center textarea.name { width: 100%; resize: none; overflow: hidden; border-bottom: 1px dashed var(--rule); }
 .center h1.name > span:first-child { display: inline-block; }
-.center .meta { margin: 4px 0 6px; }
+.center .meta { margin: 2px 0 6px; }
 .center .notes, .center .notes-text { margin: 8px 0 4px; width: 100%; }
 .center .footer { margin: 6px 0 0; }
 
@@ -184,9 +189,9 @@ mark { background: none; color: inherit; text-decoration: underline; text-decora
 
 @media (min-width: 760px) {
   .web {
-    grid-template-columns: minmax(0, 1fr) minmax(260px, 340px) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) min(var(--spine), 100%) minmax(0, 1fr);
     grid-template-areas: "up center down" "along along along";
-    column-gap: 84px; row-gap: 64px; align-items: center; margin-top: 44px;
+    column-gap: 84px; row-gap: 64px; align-items: start;
   }
   .zone ul { padding: 0; border: 0; }
   .zone .more { display: none; }

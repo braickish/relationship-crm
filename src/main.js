@@ -113,7 +113,7 @@ function signInView() {
   const doc = h('div', { class: 'doc signin' });
 
   const askForEmail = () => doc.replaceChildren(
-    h('h1', {}, 'Relationships'),
+    h('h1', {}, 'spigots'),
     h('p', {}, 'Who you know, and how. Sign in with your email; no password.'),
     h('form', { class: 'line-form', onsubmit: send }, email, button),
   );
@@ -146,7 +146,7 @@ function signInView() {
 function shell(content) {
   return h('div', { class: 'page' },
     h('header', { class: 'top' },
-      h('a', { class: 'mark', href: '#/' }, 'Relationships'),
+      h('a', { class: 'mark', href: '#/' }, 'spigots'),
       h('span', { class: 'who' }, session.user.email, ' · ',
         h('button', { class: 'text', onclick: () => supabase.auth.signOut() }, 'sign out'))),
     h('main', {}, content));
@@ -263,19 +263,32 @@ function withCompletion(input) {
 let query = '';      // the search, kept while it's being typed so the focus view can hand it over
 let justAdded = null; // a name to scroll to and flash after it's added from the search
 
+// The crumb, title and counts above the search. Both views share it, so the search and the box under it
+// stay put when you move between the cards and the web. The title is editable on the cards; in the web
+// it links back to them.
+function projectHeader({ onCards }) {
+  let title;
+  if (onCards) {
+    title = autosize(h('textarea', { id: 'project-title', class: 'title', rows: 1, maxlength: 120, 'aria-label': 'Project name', disabled: !canEdit(), spellcheck: false }));
+    title.value = project.name;
+    const rename = async () => {
+      const name = title.value.trim();
+      if (!name || name === project.name) { title.value = project.name; return; }
+      if (await run(async () => must(await supabase.from('projects').update({ name }).eq('id', project.id)), { success: 'Renamed' })) project.name = name;
+    };
+    title.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } if (e.key === 'Escape') { title.value = project.name; title.blur(); } });
+    title.addEventListener('blur', rename);
+  } else title = h('h1', { class: 'title' }, h('a', { href: `#/p/${project.id}`, title: 'Back to all names' }, project.name));
+  return h('header', { class: 'spine project-head' },
+    h('p', { class: 'crumb' }, h('a', { href: '#/' }, '← projects')),
+    title,
+    h('p', { class: 'meta' }, plural(project.elements.size, 'name'), ', ', plural(project.connections.length, 'connection'),
+      project.role !== 'owner' ? ` · you’re ${project.role === 'editor' ? 'an editor' : 'a viewer'}` : ''));
+}
+
 function projectView() {
   const editable = canEdit();
   const elements = [...project.elements.values()].sort((a, b) => a.label.localeCompare(b.label));
-
-  const title = autosize(h('textarea', { id: 'project-title', class: 'title', rows: 1, maxlength: 120, 'aria-label': 'Project name', disabled: !editable, spellcheck: false }));
-  title.value = project.name;
-  const rename = async () => {
-    const name = title.value.trim();
-    if (!name || name === project.name) { title.value = project.name; return; }
-    if (await run(async () => must(await supabase.from('projects').update({ name }).eq('id', project.id)), { success: 'Renamed' })) project.name = name;
-  };
-  title.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } if (e.key === 'Escape') { title.value = project.name; title.blur(); } });
-  title.addEventListener('blur', rename);
 
   const ties = neighbourhoods();
   const cards = elements.map(el => elementCard(el, ties.get(el.id) || []));
@@ -351,18 +364,14 @@ function projectView() {
   queueMicrotask(filter);
 
   return h('div', { class: 'doc project', dataset: { project: project.id } },
-    h('p', { class: 'crumb' }, h('a', { href: '#/' }, '← projects')),
-    title,
-    h('p', { class: 'meta' }, plural(elements.length, 'name'), ', ', plural(project.connections.length, 'connection'),
-      project.role !== 'owner' ? ` · you’re ${project.role === 'editor' ? 'an editor' : 'a viewer'}` : ''),
-    h('div', { class: 'search' }, search, status),
-    addCard,
-    list,
-    !elements.length && h('p', { class: 'quiet' }, editable ? 'Type a name above and press Enter.' : 'Nothing here yet.'),
-    editable && h('p', { class: 'quiet syntax' },
-      [['->', 'points to'], ['<-', 'comes from'], ['<->', 'both ways'], ['--', 'no direction'], ['[type]', 'after a name'], [': kind', 'names a connection'], ['Tab', 'completes'], ['/', 'search']]
+    projectHeader({ onCards: true }),
+    h('div', { class: 'search spine' }, search, status),
+    h('div', { class: 'spine' }, addCard, list),
+    !elements.length && h('p', { class: 'quiet spine' }, editable ? 'Type a name above and press Enter.' : 'Nothing here yet.'),
+    editable && h('p', { class: 'quiet syntax spine' },
+      [['->', 'downstream'], ['<-', 'upstream'], ['<->', 'mutual'], ['--', 'no direction'], ['[type]', 'after a name'], [': kind', 'names a connection'], ['Tab', 'completes'], ['/', 'search']]
         .map(([key, what]) => h('span', {}, h('kbd', {}, key), what))),
-    project.role === 'owner' && h('p', { class: 'footer' }, twoStep('delete this project', `really delete “${project.name}”?`, async () => {
+    project.role === 'owner' && h('p', { class: 'footer spine' }, twoStep('delete this project', `really delete “${project.name}”?`, async () => {
       must(await supabase.from('projects').delete().eq('id', project.id));
       project = null;
       toast('Project deleted');
@@ -439,7 +448,7 @@ function elementCard(el, links) {
     h('span', { class: 'card-head' },
       named(h('span', { class: 'name' }, el.label), el.id),
       el.element_type && h('span', { class: 'type' }, ` [${el.element_type}]`)),
-    h('span', { class: 'meta' }, links.length ? [by.up.length, ' in · ', by.down.length, ' out · ', by.along.length, ' alongside'] : 'not connected yet'),
+    h('span', { class: 'meta' }, links.length ? [by.up.length, ' upstream · ', by.down.length, ' downstream · ', by.along.length, ' mutual'] : 'not connected yet'),
     el.description && h('span', { class: 'notes-text' }, el.description.length > 180 ? `${el.description.slice(0, 180).trimEnd()}…` : el.description),
     links.length > 0 && h('span', { class: 'ties' },
       ['up', 'down', 'along']
@@ -472,13 +481,13 @@ function arrowControl(c, el, editable, glyph = ARROW_GLYPH[c.arrows]) {
 // ---------------------------------------------------------------- the web (one name at the centre)
 //
 // The open name sits in the middle. What points to it is on the left, what it points to is on
-// the right, and two-way or undirected connections sit alongside, underneath. Clicking any
+// the right (upstream and downstream), and mutual or undirected ties sit underneath. Clicking any
 // neighbour moves it to the centre; the name you left slides to wherever it now belongs.
 
 const ZONES = [
-  { key: 'up', label: 'comes from', typed: '<-', placeholder: 'who points here' },
-  { key: 'down', label: 'points to', typed: '->', placeholder: 'points to…' },
-  { key: 'along', label: 'alongside', typed: '<->', placeholder: 'connected with…' },
+  { key: 'up', label: 'upstream', typed: '<-', placeholder: 'add upstream…' },
+  { key: 'down', label: 'downstream', typed: '->', placeholder: 'add downstream…' },
+  { key: 'along', label: 'mutual', typed: '<->', placeholder: 'add mutual…' },
 ];
 const ZONE_OF = { in: 'up', out: 'down', both: 'along', none: 'along' };
 const FOLD = 8; // a zone with more neighbours than this shows FOLD - 1 and a "+ more" button
@@ -506,8 +515,8 @@ function focusView(el) {
   const degree = degrees();
 
   return h('div', { class: 'doc focus', dataset: { project: project.id } },
-    h('p', { class: 'crumb' }, h('a', { href: `#/p/${project.id}` }, '← ', project.name)),
-    h('div', { class: 'search' }, searchLine()),
+    projectHeader({ onCards: false }),
+    h('div', { class: 'search spine' }, searchLine(), h('p', { class: 'quiet count' })),
     h('div', { class: 'web' },
       svg('svg', { class: 'web-lines', 'aria-hidden': 'true' }),
       zoneView(ZONES[0], zones.up, el, editable, degree, seen),
@@ -522,7 +531,7 @@ function centreCard(el, zones, editable) {
   const card = h('section', { class: 'center', 'aria-label': el.label },
     editable ? nameEditor(el)
       : h('h1', { class: 'name' }, named(h('span', {}, el.label), el.id), el.element_type && h('span', { class: 'type' }, ` [${el.element_type}]`)),
-    h('p', { class: 'meta' }, total ? [zones.up.length, ' in · ', zones.down.length, ' out · ', zones.along.length, ' alongside'] : 'not connected yet'),
+    h('p', { class: 'meta' }, total ? [zones.up.length, ' upstream · ', zones.down.length, ' downstream · ', zones.along.length, ' mutual'] : 'not connected yet'),
     notesEditor(el, editable),
     editable && h('p', { class: 'footer' },
       twoStep('delete', `delete ${el.label}${total ? ` and ${plural(total, 'connection')}` : ''}?`, async () => {
@@ -691,7 +700,7 @@ function nameEditor(el) {
   return input;
 }
 
-// With a name at the centre and nothing focused: Enter jumps to its "points to" line, Escape goes back to the list.
+// With a name at the centre and nothing focused: Enter jumps to its "downstream" line, Escape goes back to the list.
 document.addEventListener('keydown', e => {
   if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || !project || !document.querySelector('.web')) return;
   const active = document.activeElement;

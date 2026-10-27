@@ -1,7 +1,10 @@
-# Relationship CRM (prototype)
+# spigots (prototype)
 
-A bare-bones tool for tracking relationships: create a project, add elements (people, organizations, …),
-and connect them. Built on Supabase (Postgres + Auth), with access rules enforced in the database.
+A bare-bones tool for tracking relationships, named for the spinnerets a spider spins its web from.
+Create a project, add elements (people, organizations, …), and connect them; then walk the web one
+name at a time, with what's upstream on one side and downstream on the other.
+
+Live at https://braickish.github.io/spigots/. Built on Supabase (Postgres + Auth), with access rules enforced in the database.
 
 ## Security model
 

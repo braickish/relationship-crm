@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { chromium } from 'playwright';
 
-const BASE = 'http://127.0.0.1:5173/relationship-crm/';
+const BASE = 'http://127.0.0.1:5173/spigots/';
 const MAIL = 'http://127.0.0.1:54324';
 const SHOTS = new URL('../test-results/', import.meta.url).pathname;
 mkdirSync(SHOTS, { recursive: true });
@@ -105,11 +105,11 @@ try {
   await page.press('#search', 'Enter');
   await page.waitForSelector('.center #element-name');
   check((await page.inputValue('#element-name')).startsWith('Ada Lovelace'), 'Enter on the search opens the top match at the centre');
-  check((await zone('up').innerText()).includes('Acme Foundation'), 'what points to a name is on its "comes from" side');
+  check((await zone('up').innerText()).includes('Acme Foundation'), 'what points to a name is upstream of it');
   await page.click('.zone-label');
   check(await page.evaluate(() => document.activeElement?.id) !== 'add-down', 'opening a name doesn’t put the cursor on a connection line');
   await page.keyboard.press('Enter');
-  check(await page.evaluate(() => document.activeElement?.id) === 'add-down', 'Enter puts the cursor on the "points to" line');
+  check(await page.evaluate(() => document.activeElement?.id) === 'add-down', 'Enter puts the cursor on the "downstream" line');
 
   // Where you type sets the direction.
   await page.fill('#add-down', 'Gra');
@@ -118,13 +118,13 @@ try {
   await page.type('#add-down', ' : mentor');
   await page.press('#add-down', 'Enter');
   await page.waitForFunction(() => document.querySelector('.zone.down')?.textContent.includes('Grace Hopper'));
-  check((await zone('down').innerText()).includes('mentor'), 'a name typed on the "points to" side is pointed to, with its kind');
+  check((await zone('down').innerText()).includes('mentor'), 'a name typed downstream is pointed to, with its kind');
   check(await page.evaluate(() => document.activeElement?.id) === 'add-down', 'the cursor stays on the line after adding');
 
   await page.fill('#add-along', 'City Council [government] : advises');
   await page.press('#add-along', 'Enter');
   await page.waitForFunction(() => document.querySelector('.zone.along')?.textContent.includes('City Council'));
-  check((await zone('along').locator('.row .arrow').innerText()) === '↔', 'a name typed alongside is connected both ways');
+  check((await zone('along').locator('.row .arrow').innerText()) === '↔', 'a name typed as mutual is connected both ways');
 
   await page.fill('#add-up', '-> Babbage : corresponds');
   await page.press('#add-up', 'Enter');
@@ -169,9 +169,24 @@ try {
   check(await visibleCards() === 6, 'Escape returns to the cards, which show every name');
   check(await page.locator('.card.flash .name').innerText() === 'Ada Lovelace', 'the card you came back from is marked');
 
-  // The search sits above the web too; typing there goes back to the filtered cards.
+  // Opening a card keeps the box the same width, in the same column, under a search that doesn't move.
+  const box = sel => page.evaluate(q => { const r = document.querySelector(q).getBoundingClientRect(); return { x: r.left, w: r.width, top: r.top + scrollY }; }, sel);
+  await page.evaluate(() => scrollTo(0, 0));
+  const graceCard = await card('Grace Hopper').evaluate(el => { const r = el.getBoundingClientRect(); return { x: r.left, w: r.width }; });
+  const firstCard = await box('.cards .card');
+  const searchOnCards = await box('#search');
   await card('Grace Hopper').click();
   await page.waitForSelector('.center');
+  await page.waitForTimeout(700);
+  const centre = await box('.center');
+  const searchInWeb = await box('#search');
+  const near = (a, b) => Math.abs(a - b) < 1.5;
+  check(near(centre.x, graceCard.x) && near(centre.w, graceCard.w), 'an opened box keeps its width and column', `card ${JSON.stringify(graceCard)}, centre ${JSON.stringify(centre)}`);
+  check(near(centre.top, firstCard.top), 'the centre box sits where the first card was', `first card at ${firstCard.top}, centre at ${centre.top}`);
+  check(near(searchInWeb.top, searchOnCards.top) && near(searchInWeb.x, searchOnCards.x) && near(searchInWeb.w, centre.w), 'the search stays in place, as wide as the box',
+    `${JSON.stringify(searchOnCards)} vs ${JSON.stringify(searchInWeb)}`);
+
+  // The search sits above the web too; typing there goes back to the filtered cards.
   await page.keyboard.press('/');
   check(await page.evaluate(() => document.activeElement?.id) === 'search', '/ jumps to the search');
   await page.keyboard.type('bab');
@@ -203,13 +218,10 @@ try {
   await page.emulateMedia({ colorScheme: 'light' });
   await page.waitForTimeout(800);
   await page.screenshot({ path: `${SHOTS}5-web-phone.png`, fullPage: true });
-  await page.click('.crumb a');
+  await page.click('.project-head .title a');
   await page.waitForSelector('.cards .card');
   await page.waitForTimeout(800);
   await page.screenshot({ path: `${SHOTS}6-cards-phone.png`, fullPage: true });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.emulateMedia({ colorScheme: 'light' });
-  await page.screenshot({ path: `${SHOTS}5-web-phone.png`, fullPage: true });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
   check(overflow <= 0, 'nothing scrolls sideways at phone width', `${overflow}px too wide`);
 
