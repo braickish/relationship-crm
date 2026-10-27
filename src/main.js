@@ -1,6 +1,8 @@
-import '@fontsource/rock-salt/400.css';
-import '@fontsource/reenie-beanie/400.css';
-import '@fontsource/special-elite/400.css';
+import '@fontsource/zilla-slab/600.css';
+import '@fontsource/zilla-slab/700.css';
+import '@fontsource/architects-daughter/400.css';
+import '@fontsource/courier-prime/400.css';
+import '@fontsource/courier-prime/700.css';
 import './style.css';
 import { supabase, fetchAll, describeError } from './supabase.js';
 import { h, toast, autosize } from './dom.js';
@@ -319,6 +321,12 @@ function nameEditor(el) {
     const parsed = parseName(input.value);
     const type = parsed?.typeGiven ? parsed.type : null;
     if (!parsed || (parsed.label === el.label && type === (el.element_type || null))) { input.value = withType(el); return; }
+    const clash = byLabel(parsed.label);
+    if (clash && clash.id !== el.id) {
+      toast(`There’s already a ${clash.label} in this project. Pick a different name.`, 'error');
+      input.value = withType(el);
+      return;
+    }
     if (await run(async () => must(await supabase.from('elements').update({ label: parsed.label, element_type: type }).eq('id', el.id)), { success: 'Saved' })) await reload();
   };
   input.addEventListener('keydown', e => {
@@ -346,7 +354,7 @@ function connectForm(el) {
     const lead = input.value.match(/^\s*(<->|<-|->|--)\s/);
     if (lead) { setArrows(TYPED_ARROW[lead[1]]); input.value = input.value.slice(lead[0].length); }
   });
-  input.addEventListener('keydown', e => { if (e.key === 'Escape') { if (input.value) input.value = ''; else input.blur(); } });
+  input.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); if (input.value) input.value = ''; else input.blur(); } });
 
   return h('li', { class: 'adder' }, arrow,
     h('form', { class: 'text', onsubmit: async e => {
@@ -358,11 +366,13 @@ function connectForm(el) {
       } }, input));
 }
 
-// With a name open and nothing focused, Enter jumps to its connection line.
+// With a name open and nothing focused: Enter jumps to its connection line, Escape closes it.
 document.addEventListener('keydown', e => {
-  if (e.key !== 'Enter' || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || !project || !document.querySelector('li.el.open')) return;
   const active = document.activeElement;
-  if (active && active !== document.body && active.matches('input, textarea, select, button, a, [contenteditable]')) return;
+  const typing = active && active !== document.body && active.matches('input, textarea, select, [contenteditable]');
+  if (e.key === 'Escape' && !typing) { e.preventDefault(); go(`#/p/${project.id}`); return; }
+  if (e.key !== 'Enter' || (active && active !== document.body && (typing || active.matches('button, a')))) return;
   const line = document.getElementById('connect-line');
   if (line) { e.preventDefault(); line.focus(); }
 });

@@ -49,12 +49,12 @@ select lives_ok($$
           (select id from ids where name = 'grace'), 'mentor')
 $$, 'alice connects two elements');
 select lives_ok($$
-  update public.connections set from_element_id = to_element_id, to_element_id = from_element_id where connection_type = 'mentor'
+  update public.connections set from_element_id = to_element_id, to_element_id = from_element_id where connection_type = 'mentor' and project_id = (select id from ids where name = 'alice_project')
 $$, 'an editor can reverse a connection');
-select is((select from_element_id from public.connections where connection_type = 'mentor'),
+select is((select from_element_id from public.connections where connection_type = 'mentor' and project_id = (select id from ids where name = 'alice_project')),
   (select id from ids where name = 'grace'), 'reversing swaps the two ends');
 select throws_ok($$
-  update public.connections set to_element_id = from_element_id where connection_type = 'mentor'
+  update public.connections set to_element_id = from_element_id where connection_type = 'mentor' and project_id = (select id from ids where name = 'alice_project')
 $$, 'P0001', null, 'a connection cannot be re-pointed at other elements');
 select is((select created_by from public.elements where label = 'Ada'),
   'a0000000-0000-4000-8000-000000000001'::uuid, 'created_by is set by the database');
@@ -137,7 +137,7 @@ select is((select label from public.elements where id = (select id from ids wher
   'a viewer''s update changed nothing');
 select is((select count(*) from public.connections where project_id = (select id from ids where name = 'alice_project')),
   1::bigint, 'a viewer''s delete removed nothing');
-select is((select from_element_id from public.connections where connection_type = 'mentor'),
+select is((select from_element_id from public.connections where connection_type = 'mentor' and project_id = (select id from ids where name = 'alice_project')),
   (select id from ids where name = 'grace'), 'a viewer cannot reverse a connection');
 
 -- ---------------------------------------------------------------- magic link only

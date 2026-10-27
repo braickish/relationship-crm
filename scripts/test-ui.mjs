@@ -157,8 +157,8 @@ try {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
   check(overflow <= 0, 'nothing scrolls sideways at phone width', `${overflow}px too wide`);
 
-  for (const font of ['Rock Salt', 'Reenie Beanie', 'Special Elite']) {
-    check(await page.evaluate(f => document.fonts.check(`20px "${f}"`), font), `${font} loaded from the site itself`);
+  for (const font of ['Zilla Slab', 'Architects Daughter', 'Courier Prime']) {
+    check(await page.evaluate(f => document.fonts.check(`700 20px "${f}"`) || document.fonts.check(`20px "${f}"`), font), `${font} loaded from the site itself`);
   }
 
   await page.click('text=sign out');

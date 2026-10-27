@@ -28,5 +28,8 @@ export function describeError(error) {
   if (error?.status === 429 || /rate limit/i.test(error?.message || '')) {
     return 'Too many attempts. Wait a minute and try again.';
   }
+  if (!navigator.onLine || /failed to fetch|networkerror|load failed/i.test(error?.message || '')) {
+    return 'Can’t reach the server. Check your connection; your text is still there to try again.';
+  }
   return error?.message || 'Something went wrong. Refresh and try again.';
 }
