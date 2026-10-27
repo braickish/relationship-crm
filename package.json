@@ -5,14 +5,27 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:db": "supabase test db",
-    "test:auth": "node scripts/test-auth.mjs"
+    "test:auth": "node scripts/test-auth.mjs",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test:ui": "vite build --mode localtest && node scripts/test-ui.mjs",
+    "deploy": "sh scripts/deploy.sh"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "private": true,
   "devDependencies": {
-    "supabase": "2.120.0"
+    "playwright": "1.64.0",
+    "supabase": "2.120.0",
+    "vite": "8.3.4"
+  },
+  "dependencies": {
+    "@fontsource/figtree": "5.3.0",
+    "@fontsource/kalam": "5.3.0",
+    "@supabase/supabase-js": "2.117.3",
+    "roughjs": "4.6.6"
   }
 }

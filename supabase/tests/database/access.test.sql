@@ -2,7 +2,10 @@
 -- Alice owns a project. Bob is a stranger to it, then a viewer. Every way Bob might reach
 -- Alice's data must fail, and the client-side columns that must never change must stay put.
 begin;
+-- Hosted databases connect the test runner as a temporary login role, so act as postgres explicitly.
+set local role postgres;
 create extension if not exists pgtap with schema extensions;
+set local search_path = public, extensions;
 select plan(34);
 
 insert into auth.users (id, email, aud, role, encrypted_password) values
@@ -17,7 +20,7 @@ set local role anon;
 select throws_ok($$ select public.create_project('Nope') $$, '42501', null, 'anon cannot create projects');
 select throws_ok($$ select * from public.projects $$, '42501', null, 'anon cannot read projects');
 select throws_ok($$ select * from public.elements $$, '42501', null, 'anon cannot read elements');
-reset role;
+set local role postgres;
 
 -- ---------------------------------------------------------------- alice builds a project
 set local role authenticated;
@@ -25,7 +28,7 @@ set local request.jwt.claims = '{"sub":"a0000000-0000-4000-8000-000000000001","r
 select lives_ok($$ select public.create_project('  Alice''s network  ') $$, 'alice creates a project');
 select is((select name from public.projects), 'Alice''s network', 'project name is trimmed');
 select is((select role::text from public.project_members), 'owner', 'creator becomes owner');
-reset role;
+set local role postgres;
 insert into ids select 'alice_project', id from public.projects where name = 'Alice''s network';
 
 set local role authenticated;
@@ -34,7 +37,7 @@ select lives_ok($$
   insert into public.elements (project_id, label, element_type)
   select id, l, 'person' from ids, unnest(array['Ada', 'Grace']) l where name = 'alice_project'
 $$, 'alice adds elements');
-reset role;
+set local role postgres;
 insert into ids select 'ada', id from public.elements where label = 'Ada';
 insert into ids select 'grace', id from public.elements where label = 'Grace';
 
@@ -60,7 +63,7 @@ select throws_ok($$ update public.projects set created_by = 'b0000000-0000-4000-
   '42501', null, 'clients cannot change a project owner column');
 select throws_ok($$ insert into public.projects (name, created_by) values ('Direct', auth.uid()) $$,
   '42501', null, 'projects can only be created through create_project()');
-reset role;
+set local role postgres;
 
 -- ---------------------------------------------------------------- bob, a stranger
 set local role authenticated;
@@ -81,7 +84,7 @@ delete from public.elements where id = (select id from ids where name = 'grace')
 delete from public.projects where id = (select id from ids where name = 'alice_project');
 update public.projects set name = 'Hacked' where id = (select id from ids where name = 'alice_project');
 select lives_ok($$ select public.create_project('Bob''s network') $$, 'bob creates his own project');
-reset role;
+set local role postgres;
 insert into ids select 'bob_project', id from public.projects where name = 'Bob''s network';
 
 set local role authenticated;
@@ -95,7 +98,7 @@ $$, '23503', null, 'bob cannot connect his element to alice''s element');
 select throws_ok($$
   update public.elements set project_id = (select id from ids where name = 'alice_project') where label = 'Bobby'
 $$, '42501', null, 'elements cannot be moved to another project');
-reset role;
+set local role postgres;
 
 select is((select label from public.elements where id = (select id from ids where name = 'ada')), 'Ada',
   'bob''s update of alice''s element changed nothing');
@@ -119,7 +122,7 @@ update public.elements set label = 'Viewer edit' where id = (select id from ids 
 delete from public.connections where project_id = (select id from ids where name = 'alice_project');
 select throws_ok($$ update public.project_members set role = 'owner' where user_id = auth.uid() $$,
   '42501', null, 'a viewer cannot promote himself');
-reset role;
+set local role postgres;
 select is((select label from public.elements where id = (select id from ids where name = 'ada')), 'Ada',
   'a viewer''s update changed nothing');
 select is((select count(*) from public.connections where project_id = (select id from ids where name = 'alice_project')),
@@ -139,10 +142,11 @@ select is((select encrypted_password from auth.users where email = 'carol@exampl
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"a0000000-0000-4000-8000-000000000001","role":"authenticated"}';
 delete from public.projects where id = (select id from ids where name = 'alice_project');
-reset role;
+set local role postgres;
 select is((select count(*) from public.elements where project_id = (select id from ids where name = 'alice_project')),
   0::bigint, 'deleting a project deletes its elements');
-select is((select count(*) from public.connections), 0::bigint, 'and its connections');
+select is((select count(*) from public.connections where project_id = (select id from ids where name = 'alice_project')),
+  0::bigint, 'and its connections');
 
 select * from finish();
 rollback;
