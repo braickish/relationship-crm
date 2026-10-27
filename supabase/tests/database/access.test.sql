@@ -6,7 +6,7 @@ begin;
 set local role postgres;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(34);
+select plan(38);
 
 insert into auth.users (id, email, aud, role, encrypted_password) values
   ('a0000000-0000-4000-8000-000000000001', 'alice@example.com', 'authenticated', 'authenticated', ''),
@@ -48,6 +48,14 @@ select lives_ok($$
   values ((select id from ids where name = 'alice_project'), (select id from ids where name = 'ada'),
           (select id from ids where name = 'grace'), 'mentor')
 $$, 'alice connects two elements');
+select lives_ok($$
+  update public.connections set from_element_id = to_element_id, to_element_id = from_element_id where connection_type = 'mentor'
+$$, 'an editor can reverse a connection');
+select is((select from_element_id from public.connections where connection_type = 'mentor'),
+  (select id from ids where name = 'grace'), 'reversing swaps the two ends');
+select throws_ok($$
+  update public.connections set to_element_id = from_element_id where connection_type = 'mentor'
+$$, 'P0001', null, 'a connection cannot be re-pointed at other elements');
 select is((select created_by from public.elements where label = 'Ada'),
   'a0000000-0000-4000-8000-000000000001'::uuid, 'created_by is set by the database');
 select throws_ok($$
@@ -120,6 +128,8 @@ select throws_ok($$
 $$, '42501', null, 'a viewer cannot add elements');
 update public.elements set label = 'Viewer edit' where id = (select id from ids where name = 'ada');
 delete from public.connections where project_id = (select id from ids where name = 'alice_project');
+update public.connections set from_element_id = to_element_id, to_element_id = from_element_id
+  where project_id = (select id from ids where name = 'alice_project');
 select throws_ok($$ update public.project_members set role = 'owner' where user_id = auth.uid() $$,
   '42501', null, 'a viewer cannot promote himself');
 set local role postgres;
@@ -127,6 +137,8 @@ select is((select label from public.elements where id = (select id from ids wher
   'a viewer''s update changed nothing');
 select is((select count(*) from public.connections where project_id = (select id from ids where name = 'alice_project')),
   1::bigint, 'a viewer''s delete removed nothing');
+select is((select from_element_id from public.connections where connection_type = 'mentor'),
+  (select id from ids where name = 'grace'), 'a viewer cannot reverse a connection');
 
 -- ---------------------------------------------------------------- magic link only
 insert into auth.users (id, email, aud, role, encrypted_password)

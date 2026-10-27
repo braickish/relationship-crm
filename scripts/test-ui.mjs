@@ -32,8 +32,9 @@ try {
   await page.addInitScript(() => document.addEventListener('securitypolicyviolation',
     e => console.error(`CSP blocked ${e.blockedURI} (${e.violatedDirective})`)));
 
-  const item = label => page.locator('li.el').filter({ has: page.locator(`:scope > a.name:text-is("${label}"), :scope > input.name`) }).first();
-  const conns = label => page.locator('li.el', { has: page.locator(`:scope > a.name:text-is("${label}")`) }).locator('.conn');
+  const nameRe = label => new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( \\[.*\\])?$`);
+  const item = label => page.locator('li.el').filter({ has: page.locator(':scope > a.name', { hasText: nameRe(label) }) }).first();
+  const conns = label => page.locator('li.el').filter({ has: page.locator(':scope > a.name', { hasText: nameRe(label) }) }).locator('.conn');
   const openItem = () => page.locator('li.el.open');
 
   // Sign in with a magic link from the local inbox.
@@ -63,15 +64,16 @@ try {
   await page.waitForSelector('#add-line');
   check(await page.evaluate(() => document.activeElement?.id) === 'add-line', 'a new project opens with the cursor on its first line');
 
-  // Names and connections are lines too.
-  for (const line of ['Ada Lovelace', 'Grace Hopper', 'Acme Foundation -> Ada Lovelace : funds']) {
+  // Names and connections are lines too, with an optional [type] after any name.
+  for (const [line, count] of [['Ada Lovelace [person]', 1], ['Grace Hopper', 2], ['Acme Foundation [organization] -> Ada Lovelace : funds', 3]]) {
     await page.fill('#add-line', line);
     await page.press('#add-line', 'Enter');
-    await page.waitForFunction(n => document.querySelectorAll('li.el').length >= n, line.includes('->') ? 3 : line === 'Ada Lovelace' ? 1 : 2);
+    await page.waitForFunction(n => document.querySelectorAll('li.el').length >= n, count);
   }
   check(await page.locator('li.el').count() === 3, 'two typed names plus an arrow line make three names');
   check(await conns('Ada Lovelace').count() === 1 && (await conns('Ada Lovelace').first().innerText()).includes('Acme Foundation'),
     'the arrow line connected Acme to Ada');
+  check((await item('Acme Foundation').locator('.type').innerText()).includes('[organization]'), 'a [type] typed in an arrow line is saved');
   check(await page.evaluate(() => document.activeElement?.id) === 'add-line', 'the cursor stays on the next line for quick entry');
 
   await page.fill('#add-line', '-> nobody');
@@ -84,28 +86,51 @@ try {
   await page.waitForSelector('li.el >> text=<img');
   check(await page.locator('.outline img').count() === 0, 'a name containing HTML is shown as text');
 
-  // Open Ada and connect by typing.
+  // Opening a name doesn't grab the cursor; Enter does.
   await item('Ada Lovelace').locator('a.name').click();
   await page.waitForSelector('#connect-line');
-  check(await page.evaluate(() => document.activeElement?.id) === 'connect-line', 'opening a name puts the cursor on its connection line');
+  check(await page.evaluate(() => document.activeElement?.id) !== 'connect-line', 'opening a name leaves the cursor where it was');
+  check((await page.getAttribute('#connect-line', 'placeholder')).includes('press enter'), 'the connection line reminds you to press Enter');
+  await page.keyboard.press('Enter');
+  check(await page.evaluate(() => document.activeElement?.id) === 'connect-line', 'Enter puts the cursor on the connection line');
+
   await page.fill('#connect-line', '-> Gra');
   await page.press('#connect-line', 'Tab');
-  check(await page.inputValue('#connect-line') === '-> Grace Hopper', 'Tab completes a name', await page.inputValue('#connect-line'));
+  check(await page.inputValue('#connect-line') === 'Grace Hopper', 'a typed arrow moves into the arrow column, and Tab completes the name', await page.inputValue('#connect-line'));
   await page.type('#connect-line', ' : mentor');
+  const typedLeft = await page.evaluate(() => document.getElementById('connect-line').getBoundingClientRect().left);
   await page.press('#connect-line', 'Enter');
   await page.waitForFunction(() => document.querySelectorAll('li.el.open .conn').length === 2);
-  await page.fill('#connect-line', '<-> City Council : advises');
+  const savedLeft = await page.evaluate(() => [...document.querySelectorAll('li.el.open .conn .text a')].find(a => a.textContent === 'Grace Hopper').getBoundingClientRect().left);
+  check(Math.abs(typedLeft - savedLeft) < 1.5, 'a new connection lines up with the saved ones', `typed at ${typedLeft}px, saved at ${savedLeft}px`);
+  check(await page.evaluate(() => document.activeElement?.id) === 'connect-line', 'the cursor stays on the connection line after adding');
+
+  await page.click('li.el.open .adder .arrow');
+  await page.click('li.el.open .adder .arrow');
+  await page.fill('#connect-line', 'City Council [government] : advises');
   await page.press('#connect-line', 'Enter');
   await page.waitForFunction(() => document.querySelectorAll('li.el.open .conn').length === 3);
   check(await page.locator('li.el').count() === 5, 'connecting to a new name adds it to the list');
-  const arrows = await openItem().locator('.conn .arrow').allInnerTexts();
-  check(arrows.join('') === '←→↔', 'each connection shows its direction', arrows.join(''));
+  check((await item('City Council').locator('.type').innerText()).includes('[government]'), 'a [type] on a connection line is saved');
+  let arrows = await openItem().locator('.conn .arrow').allInnerTexts();
+  check(arrows.join('') === '←→↔', 'the arrow chosen by clicking is used', arrows.join(''));
   check((await conns('Grace Hopper').allInnerTexts()).some(t => t.includes('Ada Lovelace') && t.includes('mentor')),
     'the connection also appears under the other name');
 
+  // Clicking a saved arrow cycles its direction.
+  await openItem().locator('.conn', { hasText: 'Grace Hopper' }).locator('.arrow').click();
+  await page.waitForFunction(() => [...document.querySelectorAll('li.el.open .conn')].find(li => li.textContent.includes('Grace Hopper'))?.querySelector('.arrow').textContent === '←');
+  check((await conns('Grace Hopper').first().locator('.arrow').innerText()) === '→', 'reversing an arrow flips it under the other name too');
+
+  // Renaming takes a [type] too.
+  await page.fill('#element-name', 'Ada Lovelace [mathematician]');
+  await page.press('#element-name', 'Enter');
+  await page.waitForSelector('#toast >> text=Saved');
+  check(await page.inputValue('#element-name') === 'Ada Lovelace [mathematician]', 'renaming can change the type');
+
   // Notes save when you leave the field.
   await page.fill('#element-notes', 'Wrote the first program.');
-  await page.click('h1, .title');
+  await page.click('.title');
   await page.waitForSelector('#toast >> text=Notes saved');
   await page.reload();
   await page.waitForSelector('#element-notes');
@@ -114,7 +139,7 @@ try {
 
   // Clicking a connection opens that name.
   await openItem().locator('.conn a', { hasText: 'Grace Hopper' }).click();
-  await page.waitForFunction(() => document.querySelector('li.el.open input.name')?.value === 'Grace Hopper');
+  await page.waitForFunction(() => document.querySelector('li.el.open input.name')?.value?.startsWith('Grace Hopper'));
   check(true, 'clicking a connection opens that name');
 
   await page.goto(BASE);

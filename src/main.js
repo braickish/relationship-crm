@@ -4,7 +4,10 @@ import '@fontsource/special-elite/400.css';
 import './style.css';
 import { supabase, fetchAll, describeError } from './supabase.js';
 import { h, toast, autosize } from './dom.js';
-import { parseProjectLine, parseElementLine, nameFragment, DIRECTION, ARROW_GLYPH } from './lines.js';
+import {
+  parseProjectLine, parseElementLine, parseName, nameFragment, connectionFor,
+  ARROW_CYCLE, ARROW_GLYPH, ARROW_WORDS, ARROW_TYPED, TYPED_ARROW,
+} from './lines.js';
 
 const app = document.getElementById('app');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -150,7 +153,7 @@ async function loadProject(id) {
   const [info, membership, elements, connections] = await Promise.all([
     supabase.from('projects').select('id, name').eq('id', id).maybeSingle().then(must),
     supabase.from('project_members').select('role').eq('project_id', id).eq('user_id', session.user.id).maybeSingle().then(must),
-    fetchAll(() => supabase.from('elements').select('id, label, description, created_at').eq('project_id', id).order('created_at')),
+    fetchAll(() => supabase.from('elements').select(ELEMENT_COLUMNS).eq('project_id', id).order('created_at')),
     fetchAll(() => supabase.from('connections').select('id, from_element_id, to_element_id, connection_type, direction').eq('project_id', id).order('created_at')),
   ]);
   if (!info) {
@@ -163,9 +166,11 @@ async function loadProject(id) {
   }
   project = { ...info, role: membership?.role ?? 'viewer', elements: new Map(elements.map(e => [e.id, e])), connections };
 }
+const ELEMENT_COLUMNS = 'id, label, element_type, description, created_at';
 const reload = async () => { await loadProject(project.id); render(); };
 const canEdit = () => project.role === 'owner' || project.role === 'editor';
 const byLabel = label => [...project.elements.values()].find(e => e.label.toLowerCase() === label.toLowerCase());
+const withType = el => (el.element_type ? `${el.label} [${el.element_type}]` : el.label);
 
 function connectionsOf(elementId) {
   return project.connections
@@ -179,22 +184,27 @@ function connectionsOf(elementId) {
     .filter(c => c.other);
 }
 
-async function ensureElement(label) {
+// Finds a name in the project or adds it. A [type] typed with an existing name updates its type.
+async function ensureElement({ label, type, typeGiven }) {
   const found = byLabel(label);
-  if (found) return found;
-  const created = must(await supabase.from('elements').insert({ project_id: project.id, label }).select('id, label, description, created_at').single());
+  if (found) {
+    if (typeGiven && type !== found.element_type) {
+      must(await supabase.from('elements').update({ element_type: type }).eq('id', found.id));
+      found.element_type = type;
+    }
+    return found;
+  }
+  const created = must(await supabase.from('elements').insert({ project_id: project.id, label, element_type: type }).select(ELEMENT_COLUMNS).single());
   project.elements.set(created.id, created);
   return created;
 }
 
-async function connect(fromLabelOrEl, arrow, toLabel, type) {
-  const a = typeof fromLabelOrEl === 'string' ? await ensureElement(fromLabelOrEl) : fromLabelOrEl;
-  const b = await ensureElement(toLabel);
-  if (a.id === b.id) throw new Error('An element can’t connect to itself.');
-  const { direction, swap } = DIRECTION[arrow];
-  const [from, to] = swap ? [b, a] : [a, b];
+async function connect(fromNameOrEl, arrow, toName, kind) {
+  const a = fromNameOrEl.id ? fromNameOrEl : await ensureElement(fromNameOrEl);
+  const b = await ensureElement(toName);
+  if (a.id === b.id) throw new Error('A name can’t connect to itself.');
   must(await supabase.from('connections').insert({
-    project_id: project.id, from_element_id: from.id, to_element_id: to.id, connection_type: type, direction,
+    project_id: project.id, ...connectionFor(TYPED_ARROW[arrow], a.id, b.id), connection_type: kind,
   }));
 }
 
@@ -229,15 +239,16 @@ function projectView(openId) {
   title.addEventListener('blur', rename);
 
   const add = withCompletion(h('input', { id: 'add-line', maxlength: 400, autocomplete: 'off', 'aria-label': 'Add a name or a connection',
-    placeholder: elements.length ? 'add a name, or  Ada -> Grace : mentor' : 'add the first name…' }));
+    placeholder: elements.length ? 'add a name, or  Ada [person] -> Grace : mentor' : 'add the first name…' }));
   const addLine = async e => {
     e.preventDefault();
     const parsed = parseProjectLine(add.value);
     if (!parsed) return toast('Write a name, or two names joined by -> (for example: Ada -> Grace).', 'error');
     const ok = await run(async () => {
       if (parsed.kind === 'element') {
-        if (byLabel(parsed.label)) throw new Error(`${parsed.label} is already on the list.`);
-        await ensureElement(parsed.label);
+        const existing = byLabel(parsed.name.label);
+        if (existing && !parsed.name.typeGiven) throw new Error(`${existing.label} is already on the list.`);
+        await ensureElement(parsed.name);
       } else await connect(parsed.from, parsed.arrow, parsed.to, parsed.type);
     }, { busy: add });
     if (ok) { pendingFocus = '#add-line'; await reload(); }
@@ -252,7 +263,7 @@ function projectView(openId) {
       elements.map(el => elementItem(el, el.id === openId, editable)),
       editable && h('li', { class: 'adder' }, h('form', { onsubmit: addLine }, add))),
     editable && h('p', { class: 'quiet syntax' },
-      [['->', 'points to'], ['<-', 'comes from'], ['<->', 'both ways'], ['--', 'no direction'], [': kind', 'names it'], ['Tab', 'completes']]
+      [['->', 'points to'], ['<-', 'comes from'], ['<->', 'both ways'], ['--', 'no direction'], ['[type]', 'after a name'], [': kind', 'names a connection'], ['Tab', 'completes']]
         .map(([key, what]) => h('span', {}, h('kbd', {}, key), what))),
     project.role === 'owner' && h('p', { class: 'footer' }, twoStep('delete this project', `really delete “${project.name}”?`, async () => {
       must(await supabase.from('projects').delete().eq('id', project.id));
@@ -266,16 +277,18 @@ function elementItem(el, open, editable) {
   const links = connectionsOf(el.id);
   const href = open ? `#/p/${project.id}` : `#/p/${project.id}/e/${el.id}`;
   return h('li', { class: open ? 'el open' : 'el', dataset: { id: el.id } },
-    open && editable ? nameEditor(el) : h('a', { class: 'name', href, 'aria-expanded': String(open) }, el.label),
+    open && editable ? nameEditor(el)
+      : h('a', { class: 'name', href, 'aria-expanded': String(open) }, el.label, el.element_type && h('span', { class: 'type' }, ` [${el.element_type}]`)),
     !open && el.description && h('span', { class: 'meta' }, ' — ', el.description.split('\n')[0].slice(0, 80)),
-    (links.length || open) && h('ul', {},
+    (links.length || (open && editable)) && h('ul', {},
       links.map(c => h('li', { class: 'conn' },
-        h('span', { class: 'arrow', title: { out: 'points to', in: 'comes from', both: 'both ways', none: 'no direction' }[c.arrows] }, ARROW_GLYPH[c.arrows]),
-        ' ', h('a', { href: `#/p/${project.id}/e/${c.other.id}` }, c.other.label),
-        c.connection_type && h('span', { class: 'kind' }, ' : ', c.connection_type),
-        open && editable && h('button', { class: 'text remove', type: 'button', 'aria-label': `Remove connection to ${c.other.label}`,
-          onclick: async e => { if (await run(async () => must(await supabase.from('connections').delete().eq('id', c.id)), { busy: e.currentTarget })) { pendingFocus = '#connect-line'; await reload(); } } }, '×'))),
-      open && editable && h('li', { class: 'adder' }, connectForm(el))),
+        arrowControl(c, el, editable),
+        h('span', { class: 'text' },
+          h('a', { href: `#/p/${project.id}/e/${c.other.id}` }, c.other.label),
+          c.connection_type && h('span', { class: 'kind' }, ' : ', c.connection_type),
+          open && editable && h('button', { class: 'text remove', type: 'button', 'aria-label': `Remove connection to ${c.other.label}`,
+            onclick: async e => { if (await run(async () => must(await supabase.from('connections').delete().eq('id', c.id)), { busy: e.currentTarget })) await reload(); } }, '×')))),
+      open && editable && connectForm(el)),
     open && notesEditor(el, editable),
     open && editable && h('p', { class: 'footer' },
       h('a', { href: `#/p/${project.id}`, class: 'quiet' }, 'close'), ' · ',
@@ -287,12 +300,26 @@ function elementItem(el, open, editable) {
       })));
 }
 
+// The arrow beside a connection. Editors click it to cycle → ← ↔ —.
+function arrowControl(c, el, editable) {
+  const glyph = ARROW_GLYPH[c.arrows];
+  if (!editable) return h('span', { class: 'arrow', title: ARROW_WORDS[c.arrows] }, glyph);
+  const next = ARROW_CYCLE[(ARROW_CYCLE.indexOf(c.arrows) + 1) % ARROW_CYCLE.length];
+  return h('button', { class: 'arrow', type: 'button', title: `${ARROW_WORDS[c.arrows]} · click for ${ARROW_WORDS[next]}`,
+    'aria-label': `${el.label} ${ARROW_WORDS[c.arrows]} ${c.other.label}. Change to ${ARROW_WORDS[next]}`,
+    onclick: async e => {
+      const ok = await run(async () => must(await supabase.from('connections').update(connectionFor(next, el.id, c.other.id)).eq('id', c.id)), { busy: e.currentTarget });
+      if (ok) { pendingFocus = `[data-conn="${c.id}"]`; await reload(); }
+    }, dataset: { conn: c.id } }, glyph);
+}
+
 function nameEditor(el) {
-  const input = h('input', { id: 'element-name', class: 'name', value: el.label, maxlength: 200, 'aria-label': 'Name', autocomplete: 'off' });
+  const input = h('input', { id: 'element-name', class: 'name', value: withType(el), maxlength: 260, 'aria-label': 'Name, with an optional [type]', autocomplete: 'off' });
   const save = async () => {
-    const label = input.value.trim();
-    if (!label || label === el.label) { input.value = el.label; return; }
-    if (await run(async () => must(await supabase.from('elements').update({ label }).eq('id', el.id)), { success: 'Renamed' })) await reload();
+    const parsed = parseName(input.value);
+    const type = parsed?.typeGiven ? parsed.type : null;
+    if (!parsed || (parsed.label === el.label && type === (el.element_type || null))) { input.value = withType(el); return; }
+    if (await run(async () => must(await supabase.from('elements').update({ label: parsed.label, element_type: type }).eq('id', el.id)), { success: 'Saved' })) await reload();
   };
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); pendingFocus = '#connect-line'; input.blur(); }
@@ -302,18 +329,43 @@ function nameEditor(el) {
   return input;
 }
 
+// The new-connection line under an open name: the same two columns as a saved connection,
+// so nothing shifts when it saves. Its arrow can be clicked (or typed) before the name.
+const RESTING = 'press enter to add a connection';
 function connectForm(el) {
-  const input = withCompletion(h('input', { id: 'connect-line', maxlength: 400, autocomplete: 'off', 'aria-label': `Connect ${el.label} to…`, placeholder: '-> who : how' }));
-  input.addEventListener('keydown', e => { if (e.key === 'Escape') go(`#/p/${project.id}`); });
-  pendingFocus ??= '#connect-line';
-  return h('form', { onsubmit: async e => {
-      e.preventDefault();
-      const parsed = parseElementLine(input.value);
-      if (!parsed) return;
-      const ok = await run(async () => connect(el, parsed.arrow, parsed.to, parsed.type), { busy: input });
-      if (ok) { pendingFocus = '#connect-line'; await reload(); }
-    } }, input);
+  let arrows = 'out';
+  const arrow = h('button', { class: 'arrow', type: 'button', title: 'direction · click to change' }, ARROW_GLYPH[arrows]);
+  const setArrows = a => { arrows = a; arrow.textContent = ARROW_GLYPH[a]; arrow.setAttribute('aria-label', `New connection ${ARROW_WORDS[a]}. Change direction`); };
+  setArrows('out');
+  arrow.addEventListener('click', () => { setArrows(ARROW_CYCLE[(ARROW_CYCLE.indexOf(arrows) + 1) % ARROW_CYCLE.length]); input.focus(); });
+
+  const input = withCompletion(h('input', { id: 'connect-line', maxlength: 400, autocomplete: 'off', 'aria-label': `Connect ${el.label} to…`, placeholder: RESTING }));
+  input.addEventListener('focus', () => { input.placeholder = 'who [type] : how'; });
+  input.addEventListener('blur', () => { input.placeholder = RESTING; });
+  input.addEventListener('input', () => {
+    const lead = input.value.match(/^\s*(<->|<-|->|--)\s/);
+    if (lead) { setArrows(TYPED_ARROW[lead[1]]); input.value = input.value.slice(lead[0].length); }
+  });
+  input.addEventListener('keydown', e => { if (e.key === 'Escape') { if (input.value) input.value = ''; else input.blur(); } });
+
+  return h('li', { class: 'adder' }, arrow,
+    h('form', { class: 'text', onsubmit: async e => {
+        e.preventDefault();
+        const parsed = parseElementLine(input.value, ARROW_TYPED[arrows]);
+        if (!parsed) return;
+        const ok = await run(async () => connect(el, parsed.arrow, parsed.to, parsed.type), { busy: input });
+        if (ok) { pendingFocus = '#connect-line'; await reload(); }
+      } }, input));
 }
+
+// With a name open and nothing focused, Enter jumps to its connection line.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+  const active = document.activeElement;
+  if (active && active !== document.body && active.matches('input, textarea, select, button, a, [contenteditable]')) return;
+  const line = document.getElementById('connect-line');
+  if (line) { e.preventDefault(); line.focus(); }
+});
 
 function notesEditor(el, editable) {
   if (!editable) return el.description && h('p', { class: 'notes-text' }, el.description);
